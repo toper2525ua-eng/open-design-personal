@@ -49,6 +49,7 @@ export type MediaProviderId =
   | 'senseaudio'
   | 'tavily'
   | 'leonardo'
+  | 'openrouter'
   | 'stub';
 
 export interface MediaProvider {
@@ -248,6 +249,15 @@ export const MEDIA_PROVIDERS: MediaProvider[] = [
     docsUrl: 'https://app.tavily.com/home',
   },
   {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    hint: 'OpenAI-compatible gateway: nano-banana-2 (image) + Veo 3.1 (video)',
+    integrated: true,
+    defaultBaseUrl: 'https://openrouter.ai/api/v1',
+    docsUrl: 'https://openrouter.ai/keys',
+    supportsCustomModel: true,
+  },
+  {
     id: 'stub',
     label: 'Stub (placeholder)',
     hint: 'Deterministic local placeholder bytes',
@@ -394,6 +404,15 @@ export const IMAGE_MODELS: MediaModel[] = [
     caps: ['t2i'],
   },
 
+  // OpenRouter — same Nano Banana 2 model, routed via OpenRouter's gateway.
+  {
+    id: 'openrouter-nano-banana-2',
+    label: 'nano-banana-2 (OpenRouter)',
+    hint: 'Google · routed via OpenRouter',
+    provider: 'openrouter',
+    caps: ['t2i'],
+  },
+
   // Black Forest Labs FLUX family.
   { id: 'flux-1.1-pro', label: 'flux-1.1-pro', hint: 'BFL · flagship', provider: 'bfl', caps: ['t2i', 'i2i'] },
   { id: 'flux-pro', label: 'flux-pro', hint: 'BFL', provider: 'bfl', caps: ['t2i'] },
@@ -513,6 +532,10 @@ export const VIDEO_MODELS: MediaModel[] = [
   // MiniMax video.
   { id: 'minimax-video-01', label: 'video-01', hint: 'MiniMax · Hailuo', provider: 'minimax', caps: ['t2v', 'i2v'] },
   { id: 'hyperframes-html', label: 'hyperframes-html', hint: 'HyperFrames · local HTML renderer', provider: 'hyperframes', caps: ['t2v'] },
+
+  // OpenRouter — Veo 3.1 routed through OpenRouter's /videos endpoint.
+  { id: 'openrouter-veo-3.1', label: 'veo-3.1 (OpenRouter)', hint: 'Google Veo 3.1 · routed via OpenRouter; t2v + audio', provider: 'openrouter', caps: ['t2v', 'audio'] },
+  { id: 'openrouter-veo-3.1-fast', label: 'veo-3.1-fast (OpenRouter)', hint: 'Veo 3.1 Fast · cheaper variant', provider: 'openrouter', caps: ['t2v', 'audio'] },
 ];
 
 export const AUDIO_MODELS_BY_KIND: Record<AudioKind, MediaModel[]> = {
