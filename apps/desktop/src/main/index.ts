@@ -262,6 +262,11 @@ function installDesktopMenu(updater: DesktopUpdater): () => void {
               void shell.openExternal("https://github.com/nexu-io/open-design");
             },
           },
+          { type: "separator" },
+          {
+            label: `Version ${app.getVersion()}`,
+            enabled: false,
+          },
         ],
       },
     ];

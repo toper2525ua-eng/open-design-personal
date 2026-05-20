@@ -1430,6 +1430,7 @@ function TypeTabBar({
   pluginsLoading,
   onPickChip,
 }: TypeTabBarProps) {
+  const t = useT();
   const chips = useMemo(() => chipsForGroup('create'), []);
   return (
     <div className="home-hero__type-tabs" role="tablist" aria-label="Output type">
@@ -1439,6 +1440,7 @@ function TypeTabBar({
         const cls = ['home-hero__type-tab'];
         if (isActive) cls.push('is-active');
         if (isPending) cls.push('is-pending');
+        const label = homeHeroChipLabel(chip.id, t);
         return (
           <button
             key={chip.id}
@@ -1450,9 +1452,9 @@ function TypeTabBar({
             onClick={() => onPickChip(chip)}
             disabled={pluginsLoading || isPending || pendingPluginId !== null}
             aria-selected={isActive}
-            title={chip.hint ?? chip.label}
+            title={homeHeroChipTitle(chip, t)}
           >
-            <span>{chip.label}</span>
+            <span>{label}</span>
           </button>
         );
       })}
