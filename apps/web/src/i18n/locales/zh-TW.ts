@@ -1,7 +1,9 @@
 import type { Dict } from '../types';
+import { tgWebZhTW } from '../../downstream/tg-web/i18n';
 import { en } from './en';
 
 export const zhTW: Dict = {
+  ...tgWebZhTW,
   ...en,
   'common.cancel': '取消',
   'common.save': '儲存',

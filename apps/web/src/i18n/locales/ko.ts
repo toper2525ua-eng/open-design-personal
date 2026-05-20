@@ -1,7 +1,9 @@
 import { en } from './en';
 import type { Dict } from '../types';
+import { tgWebKo } from '../../downstream/tg-web/i18n';
 
 export const ko: Dict = {
+  ...tgWebKo,
   ...en,
   'common.cancel': '취소',
   'common.save': '저장',

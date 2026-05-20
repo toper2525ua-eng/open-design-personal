@@ -106,6 +106,7 @@ import {
 } from '../edit-mode/source-patches';
 import { MANUAL_EDIT_STYLE_PROPS, type ManualEditBridgeMessage, type ManualEditHistoryEntry, type ManualEditPatch, type ManualEditStyles, type ManualEditTarget } from '../edit-mode/types';
 import { isRenderableSketchJson, SketchPreview } from './SketchPreview';
+import { TgWebChromeButton, TgWebPanelMount } from '../downstream/tg-web/viewer-integration';
 
 type TranslateFn = (key: keyof Dict, vars?: Record<string, string | number>) => string;
 type SlideState = { active: number; count: number };
@@ -3485,6 +3486,7 @@ function HtmlViewer({
   const zoomMenuRef = useRef<HTMLDivElement | null>(null);
   const [presentMenuOpen, setPresentMenuOpen] = useState(false);
   const [shareMenuOpen, setShareMenuOpen] = useState(false);
+  const [tgWebOpen, setTgWebOpen] = useState(false);
   // Template save UX. We surface a transient "Saved" pill in the share
   // menu so the user gets feedback without a noisy toast layer.
   const [savingTemplate, setSavingTemplate] = useState(false);
@@ -5663,6 +5665,12 @@ function HtmlViewer({
       {((filePrimaryActions: ReactNode) => (
         chromeActionsHost ? createPortal(filePrimaryActions, chromeActionsHost) : filePrimaryActions
       ))(<>
+          <TgWebChromeButton
+            projectId={projectId}
+            fileName={file.name}
+            filesRefreshKey={filesRefreshKey}
+            onOpen={() => setTgWebOpen(true)}
+          />
           {showPresent ? (
             <div className="present-wrap chrome-present-wrap">
               <button
@@ -6566,6 +6574,12 @@ function HtmlViewer({
           </div>
         </div>
       ) : null}
+      <TgWebPanelMount
+        projectId={projectId}
+        fileName={file.name}
+        open={tgWebOpen}
+        onClose={() => setTgWebOpen(false)}
+      />
     </div>
   );
 }

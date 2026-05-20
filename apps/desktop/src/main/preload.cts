@@ -21,6 +21,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     init?: { name?: string; skillId?: string | null; designSystemId?: string | null },
   ): Promise<unknown> =>
     ipcRenderer.invoke('dialog:pick-and-import', init ?? null),
+  // TG Web folder picker — returns raw chosen path to the renderer.
+  // Trust boundary intentionally relaxed for this flow (see runtime.ts
+  // handler doc for rationale).
+  tgWebPickFolder: (
+    init?: { initial?: string | null },
+  ): Promise<{ path: string } | { canceled: true }> =>
+    ipcRenderer.invoke('dialog:tg-web-pick-folder', init ?? null),
   // Reveals the named project's working directory in the OS file
   // manager. The renderer passes a project ID; the main process asks
   // the daemon for the canonical resolvedDir and forwards that path

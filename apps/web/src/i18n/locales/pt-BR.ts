@@ -1,7 +1,9 @@
 import type { Dict } from '../types';
+import { tgWebPtBR } from '../../downstream/tg-web/i18n';
 import { en } from './en';
 
 export const ptBR: Dict = {
+  ...tgWebPtBR,
   ...en,
   'common.cancel': 'Cancelar',
   'common.save': 'Salvar',

@@ -1,7 +1,9 @@
 import type { Dict } from '../types';
+import { tgWebId } from '../../downstream/tg-web/i18n';
 import { en } from './en';
 
 export const id: Dict = {
+  ...tgWebId,
   ...en,
   'common.cancel': 'Batal',
   'common.save': 'Simpan',

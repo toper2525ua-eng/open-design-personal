@@ -29,7 +29,9 @@ export const LOCALE_LABEL: Record<Locale, string> = {
 // Translation dictionary shape — flat keys, dot-namespaced. We keep it
 // flat (not deeply nested) so missing-key TS errors point straight at the
 // offending string instead of a generic object mismatch.
-export interface Dict {
+import type { TgWebI18nDict } from '../downstream/tg-web/i18n';
+
+export interface Dict extends TgWebI18nDict {
   // Common
   'common.cancel': string;
   'common.save': string;

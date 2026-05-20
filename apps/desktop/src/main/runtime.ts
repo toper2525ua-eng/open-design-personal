@@ -8,6 +8,7 @@ import type { DesktopExportPdfInput, DesktopExportPdfResult } from "@open-design
 
 import { createElectronPdfTarget, exportPdfFromHtml, savePrintReadyDocumentAsPdf } from "./pdf-export.js";
 import type { PrintReadyPdfOptions } from "./pdf-export.js";
+import { registerDesktopDownstreamHandlers } from "./downstream/index.js";
 
 /**
  * Result of validating a candidate path before exposing it to a
@@ -750,6 +751,7 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
       return false;
     }
   });
+  registerDesktopDownstreamHandlers();
   // PR #974: the renderer no longer receives a raw filesystem path from
   // the main process. The previous `dialog:pick-folder` IPC returned the
   // chosen path string, the renderer then POSTed `/api/import/folder`

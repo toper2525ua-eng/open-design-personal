@@ -1,6 +1,8 @@
 import type { Dict } from '../types';
+import { tgWebEn } from '../../downstream/tg-web/i18n';
 
 export const en: Dict = {
+  ...tgWebEn,
   'common.cancel': 'Cancel',
   'common.save': 'Save',
   'common.close': 'Close',

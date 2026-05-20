@@ -1,7 +1,9 @@
 import type { Dict } from '../types';
+import { tgWebEsES } from '../../downstream/tg-web/i18n';
 import { en } from './en';
 
 export const esES: Dict = {
+  ...tgWebEsES,
   ...en,
   'common.cancel': 'Cancelar',
   'common.save': 'Guardar',

@@ -1,7 +1,9 @@
 import type { Dict } from '../types';
+import { tgWebJa } from '../../downstream/tg-web/i18n';
 import { en } from './en';
 
 export const ja: Dict = {
+  ...tgWebJa,
   ...en,
   'common.cancel': 'キャンセル',
   'common.save': '保存',

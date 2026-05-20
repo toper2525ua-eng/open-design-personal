@@ -135,7 +135,7 @@ async function runElectronBuilderRaw(config: ToolPackConfig, paths: WinPaths, pr
       warningsAsErrors: false,
     },
     productName: PRODUCT_NAME,
-    publish: [{ provider: "generic", url: "https://updates.invalid/open-design" }],
+    publish: [{ provider: "github", owner: "toper2525ua-eng", repo: "open-design-personal" }],
     win: {
       artifactName: `${PRODUCT_NAME}-${namespaceToken}.\${ext}`,
       icon: paths.winIconPath,

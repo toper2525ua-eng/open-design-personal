@@ -5,6 +5,12 @@
 // the moment one side adds a model and the other doesn't, the build
 // fails with a precise diff.
 
+import {
+  downstreamProviders,
+  downstreamImageModels,
+  downstreamVideoModels,
+} from './downstream/index.js';
+
 export type MediaSurface = 'image' | 'video' | 'audio';
 export type AudioKind = 'music' | 'speech' | 'sfx';
 
@@ -46,7 +52,7 @@ export const MEDIA_PROVIDERS: MediaProvider[] = [
   { id: 'kling', label: 'Kuaishou Kling', hint: 'Kling 1.6 / 2.0 video', integrated: false },
   { id: 'midjourney', label: 'Midjourney (proxy)', hint: 'midjourney-v7', integrated: false },
   { id: 'minimax', label: 'MiniMax', hint: 'TTS / video-01', integrated: true, defaultBaseUrl: 'https://api.minimaxi.chat/v1' },
-  { id: 'openrouter', label: 'OpenRouter', hint: 'OpenAI-compatible gateway: nano-banana-2 (image) + Veo 3.1 (video)', integrated: true, defaultBaseUrl: 'https://openrouter.ai/api/v1', supportsCustomModel: true },
+  ...downstreamProviders,
   { id: 'suno', label: 'Suno', hint: 'Music generation', integrated: false },
   { id: 'udio', label: 'Udio', hint: 'Music generation', integrated: false },
   {
@@ -91,7 +97,7 @@ export const IMAGE_MODELS: MediaModel[] = [
 
   { id: 'custom-image', label: 'custom-image', hint: 'Custom · OpenAI-compatible endpoint', provider: 'custom-image', caps: ['t2i'] },
 
-  { id: 'openrouter-nano-banana-2', label: 'nano-banana-2 (OpenRouter)', hint: 'Google · routed via OpenRouter', provider: 'openrouter', caps: ['t2i'] },
+  ...downstreamImageModels,
 
   { id: 'flux-1.1-pro', label: 'flux-1.1-pro', hint: 'BFL · flagship', provider: 'bfl', caps: ['t2i', 'i2i'] },
   { id: 'flux-pro', label: 'flux-pro', hint: 'BFL', provider: 'bfl', caps: ['t2i'] },
@@ -142,8 +148,7 @@ export const VIDEO_MODELS: MediaModel[] = [
   { id: 'minimax-video-01', label: 'video-01', hint: 'MiniMax · Hailuo', provider: 'minimax', caps: ['t2v', 'i2v'] },
   { id: 'hyperframes-html', label: 'hyperframes-html', hint: 'HyperFrames · local HTML renderer', provider: 'hyperframes', caps: ['t2v'] },
 
-  { id: 'openrouter-veo-3.1', label: 'veo-3.1 (OpenRouter)', hint: 'Google Veo 3.1 · routed via OpenRouter; t2v + audio', provider: 'openrouter', caps: ['t2v', 'audio'] },
-  { id: 'openrouter-veo-3.1-fast', label: 'veo-3.1-fast (OpenRouter)', hint: 'Veo 3.1 Fast · cheaper variant', provider: 'openrouter', caps: ['t2v', 'audio'] },
+  ...downstreamVideoModels,
 ];
 
 export const AUDIO_MODELS_BY_KIND: Record<AudioKind, MediaModel[]> = {

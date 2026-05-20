@@ -1,7 +1,9 @@
 import { en } from './en';
 import type { Dict } from '../types';
+import { tgWebAr } from '../../downstream/tg-web/i18n';
 
 export const ar: Dict = {
+  ...tgWebAr,
   ...en,
   'common.cancel': 'إلغاء',
   'common.save': 'حفظ',

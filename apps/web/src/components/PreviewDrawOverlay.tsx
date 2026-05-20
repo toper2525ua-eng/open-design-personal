@@ -170,9 +170,20 @@ export function PreviewDrawOverlay({
     if (mode !== 'draw' || sending) return;
     const iframe = activePreviewIframe();
     const win = iframe?.contentWindow;
-    if (!win || typeof win.scrollBy !== 'function') return;
-    e.preventDefault();
-    win.scrollBy({ left: e.deltaX, top: e.deltaY, behavior: 'auto' });
+    if (!win) return;
+    // Reading any property of a cross-origin contentWindow throws
+    // SecurityError synchronously (the previous `typeof win.scrollBy`
+    // guard fired before the comparison could short-circuit). Wrap the
+    // entire access so wheel-scroll forwarding silently no-ops when the
+    // iframe loaded a different-origin URL (e.g. URL-mode preview hitting
+    // the daemon's ephemeral port).
+    try {
+      if (typeof win.scrollBy !== 'function') return;
+      e.preventDefault();
+      win.scrollBy({ left: e.deltaX, top: e.deltaY, behavior: 'auto' });
+    } catch {
+      // cross-origin frame — forwarding unavailable, let native wheel fall through
+    }
   }
 
   function clearInk() {

@@ -1,7 +1,9 @@
 import type { Dict } from '../types';
+import { tgWebFa } from '../../downstream/tg-web/i18n';
 import { en } from './en';
 
 export const fa: Dict = {
+  ...tgWebFa,
   ...en,
   'common.cancel': 'لغو',
   'common.save': 'ذخیره',

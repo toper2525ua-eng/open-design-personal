@@ -35,6 +35,13 @@ declare global {
         skillId?: string | null;
         designSystemId?: string | null;
       }) => Promise<DesktopPickAndImportResult>;
+      // TG Web folder picker. Native Electron dialog. Trust boundary
+      // intentionally relaxed for the per-design-file deploy flow —
+      // the daemon's deploy endpoint independently validates that the
+      // path exists and is a directory before writing.
+      tgWebPickFolder?: (init?: {
+        initial?: string | null;
+      }) => Promise<{ path: string } | { canceled: true }>;
       // Reveals the project's working directory in the OS file
       // manager. The argument is a project ID (not a filesystem
       // path) — the desktop main process asks the daemon for the

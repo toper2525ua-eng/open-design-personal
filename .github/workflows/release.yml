@@ -1,0 +1,111 @@
+name: Build & release Windows installer
+
+on:
+  push:
+    branches:
+      - main
+      - "release/**"
+      - feat/media-openrouter-provider
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-win:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10.33.2
+        shell: pwsh
+
+      - name: Get pnpm store path
+        id: pnpm-store
+        run: echo "path=$(pnpm store path)" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        shell: pwsh
+
+      - name: Install NSIS
+        run: |
+          choco install nsis -y --no-progress
+          Write-Host "NSIS installed."
+        shell: pwsh
+
+      - name: Pre-create NSIS Persian language alias
+        # tools-pack's ensureNsisPersianLanguageAlias would otherwise try to
+        # write into Program Files at build time. Pre-creating the files
+        # with the exact bytes the function expects skips that step.
+        run: |
+          $nsisDir = "C:\Program Files (x86)\NSIS\Contrib\Language files"
+          Copy-Item "$nsisDir\Farsi.nlf" "$nsisDir\Persian.nlf" -Force
+          $script = "const fs = require('fs'); const c = fs.readFileSync(`"$nsisDir\Farsi.nsh`".replace(/\\/g, '/'), 'utf8').replace('LANGFILE `"Farsi`"', 'LANGFILE `"Persian`"'); fs.writeFileSync(`"$nsisDir\Persian.nsh`".replace(/\\/g, '/'), c, 'utf8'); console.log('Persian.nsh written');"
+          node -e $script
+        shell: pwsh
+
+      - name: Build NSIS installer (portable, no baked paths)
+        # The --portable flag tells tools-pack to skip baking the runtime's
+        # build-machine namespace path into open-design-config.json, so the
+        # installed app falls through to the default Electron userData path
+        # on the user's machine.
+        run: pnpm tools-pack win build --to nsis --portable
+        shell: pwsh
+        env:
+          # electron-builder reads GH_TOKEN for the github publish provider
+          # (informational only — we don't use auto-publish, we upload via
+          # softprops/action-gh-release below for clearer control).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read app version
+        id: version
+        run: |
+          $v = (Get-Content apps/packaged/package.json -Raw | ConvertFrom-Json).version
+          echo "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "App version: $v"
+        shell: pwsh
+
+      - name: List build artifacts
+        run: Get-ChildItem ".tmp/tools-pack/out/win/namespaces/default/builder/" -File | Format-Table Name, Length
+        shell: pwsh
+
+      - name: Upload as GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}-${{ github.run_number }}
+          name: "Open Design Personal v${{ steps.version.outputs.version }} (build #${{ github.run_number }})"
+          body: |
+            Automated build from commit `${{ github.sha }}`.
+
+            ## Install
+            Download `Open Design-default-setup.exe` below and run it.
+
+            ## Update
+            If you already have an installed version, the auto-updater will
+            pick this release up within ~30 minutes and prompt you to restart.
+          files: |
+            .tmp/tools-pack/out/win/namespaces/default/builder/Open Design-default-setup.exe
+            .tmp/tools-pack/out/win/namespaces/default/builder/latest.yml
+          generate_release_notes: false
+          fail_on_unmatched_files: true
+          token: ${{ secrets.GITHUB_TOKEN }}
