@@ -57,11 +57,26 @@ jobs:
         # tools-pack's ensureNsisPersianLanguageAlias would otherwise try to
         # write into Program Files at build time. Pre-creating the files
         # with the exact bytes the function expects skips that step.
+        # The JS is written to a temp .cjs file because escaping backslashes
+        # through PowerShell + node -e is unreliable (paths get mangled).
         run: |
           $nsisDir = "C:\Program Files (x86)\NSIS\Contrib\Language files"
+          if (-not (Test-Path "$nsisDir\Farsi.nsh")) {
+            Write-Error "NSIS Farsi.nsh not found at $nsisDir — choco install nsis failed?"
+            exit 1
+          }
           Copy-Item "$nsisDir\Farsi.nlf" "$nsisDir\Persian.nlf" -Force
-          $script = "const fs = require('fs'); const c = fs.readFileSync(`"$nsisDir\Farsi.nsh`".replace(/\\/g, '/'), 'utf8').replace('LANGFILE `"Farsi`"', 'LANGFILE `"Persian`"'); fs.writeFileSync(`"$nsisDir\Persian.nsh`".replace(/\\/g, '/'), c, 'utf8'); console.log('Persian.nsh written');"
-          node -e $script
+          @'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const dir = 'C:/Program Files (x86)/NSIS/Contrib/Language files';
+          const farsi = fs.readFileSync(path.join(dir, 'Farsi.nsh'), 'utf8');
+          const persian = farsi.replace('LANGFILE "Farsi"', 'LANGFILE "Persian"');
+          fs.writeFileSync(path.join(dir, 'Persian.nsh'), persian, 'utf8');
+          console.log('Persian.nsh written, length:', persian.length);
+          '@ | Out-File -FilePath persian-alias.cjs -Encoding utf8
+          node persian-alias.cjs
+          Remove-Item persian-alias.cjs
         shell: pwsh
 
       - name: Build NSIS installer (portable, no baked paths)
