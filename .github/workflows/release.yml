@@ -47,19 +47,25 @@ jobs:
         run: pnpm install --frozen-lockfile
         shell: pwsh
 
-      - name: Stamp packaged version with CI build number
+      - name: Capture base version + stamp packaged version with CI build number
+        id: stamp
         # The auto-updater compares the GitHub Release tag (e.g. "v0.8.0-9")
         # against `app.getVersion()`. Without this step the package.json
         # version is just "0.8.0" and every release looks "newer", which
         # causes a relentless update prompt on every app launch. Setting
         # the version to "0.8.0-${run_number}" makes them line up.
+        # We also export the *base* version so the later release-tag step
+        # produces a clean "v0.8.0-9" tag, not "v0.8.0-9-9".
         run: |
           $pkgPath = "apps/packaged/package.json"
           $pkg = Get-Content $pkgPath -Raw | ConvertFrom-Json
-          $stamped = "$($pkg.version)-${{ github.run_number }}"
+          $base = $pkg.version
+          $stamped = "$base-${{ github.run_number }}"
           $pkg.version = $stamped
           $pkg | ConvertTo-Json -Depth 100 | Set-Content $pkgPath -Encoding utf8
-          Write-Host "Stamped packaged version: $stamped"
+          echo "base=$base" >> $env:GITHUB_OUTPUT
+          echo "stamped=$stamped" >> $env:GITHUB_OUTPUT
+          Write-Host "Base version: $base; stamped: $stamped"
         shell: pwsh
 
       - name: Install NSIS
@@ -109,10 +115,12 @@ jobs:
 
       - name: Read app version
         id: version
+        # Use the BASE version (e.g. "0.8.0") captured before the stamp step;
+        # the tag suffix is the run number alone, so tags look like
+        # "v0.8.0-9" instead of the doubled "v0.8.0-9-9".
         run: |
-          $v = (Get-Content apps/packaged/package.json -Raw | ConvertFrom-Json).version
-          echo "version=$v" >> $env:GITHUB_OUTPUT
-          Write-Host "App version: $v"
+          echo "version=${{ steps.stamp.outputs.base }}" >> $env:GITHUB_OUTPUT
+          Write-Host "Base app version (for tag): ${{ steps.stamp.outputs.base }}"
         shell: pwsh
 
       - name: List build artifacts
