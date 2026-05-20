@@ -206,9 +206,12 @@ async function applyUpdate(zipAsset: GithubReleaseAsset): Promise<void> {
     `(goto) 2>nul & del /F /Q "%~f0"\r\n`;
   await writeFile(batchPath, script, "utf-8");
 
-  // Run the batch detached so it survives our exit, then quit so the
-  // batch's wait-loop unblocks and the swap can start.
-  spawn("cmd.exe", ["/c", "start", "/min", "", batchPath], {
+  // Run the batch detached so it survives our exit. windowsHide + the
+  // direct `cmd /c batchPath` invocation (no intermediate `start /min`
+  // wrapper) means no console window flashes for the user during the
+  // update. The batch redirects all output to a log file, so the only
+  // visible window throughout the swap is the relaunched app itself.
+  spawn("cmd.exe", ["/c", batchPath], {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
