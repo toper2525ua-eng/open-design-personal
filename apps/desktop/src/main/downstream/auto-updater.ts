@@ -159,51 +159,48 @@ async function applyUpdate(zipAsset: GithubReleaseAsset): Promise<void> {
   await downloadFile(zipAsset.browser_download_url, zipPath);
   await unzipWithTar(zipPath, unpackedDir);
 
-  // Generate a self-deleting batch that swaps the install dir + relaunches.
-  // Windows can't replace a running executable, so we wait for THIS process
-  // to exit, then robocopy from staging into the install dir.
+  // Generate a self-deleting batch that swaps the resources/ dir +
+  // relaunches the existing executable. We force-kill the running app
+  // up-front (a previous `tasklist /FI` poll approach was unreliable for
+  // image names with spaces) and only ever update the resources/ tree —
+  // never the .exe or DLLs at the install root.
   //
-  // Robocopy is used instead of xcopy because the Next.js standalone bundle
-  // has paths well past Windows' MAX_PATH (260 chars), and xcopy fails with
-  // "Insufficient memory" on those. Robocopy handles long paths natively
-  // and supports up to ~32k-char paths via the kernel extended-length APIs.
+  // Why skip the .exe: Windows 11 Smart App Control blocks ANY unsigned
+  // executable that came from the internet, including .exe files extracted
+  // from a ZIP we downloaded via GitHub Releases. The currently-installed
+  // Open Design.exe has earned local trust from prior launches; replacing
+  // its bytes with a freshly-downloaded copy makes SAC re-evaluate it,
+  // and the new copy gets blocked with no recovery path short of code
+  // signing or disabling SAC (which requires reinstalling Windows). Since
+  // Open Design.exe is just the Electron launcher and all of our actual
+  // app code lives under resources/app/prebundled/ + resources/open-
+  // design-web-standalone/, leaving the .exe untouched is invisible to
+  // the user but bypasses SAC entirely.
   //
-  // Robocopy exit codes are bit flags, not POSIX-style. Codes 0-7 are OK
-  // (files copied, mismatched, extra files etc.). Code 8+ means real
-  // failure. We treat >= 8 as fatal.
-  //
-  // The batch also writes a log file so post-mortem diagnosis works even
-  // if the spawned cmd window is invisible — never pause/wait for input.
+  // Robocopy handles long paths natively (the bundled Next.js standalone
+  // has paths past Windows' MAX_PATH 260-char limit, which broke xcopy
+  // with "Insufficient memory"). Robocopy exit codes 0-7 are non-fatal;
+  // 8+ means actual failure.
   const batchPath = join(tmpRoot, `od-update-${Date.now()}.bat`);
   const logPath = join(tmpRoot, `od-update-${Date.now()}.log`);
+  const srcResources = join(unpackedDir, "resources");
+  const destResources = join(installDir, "resources");
   const script =
     `@echo off\r\n` +
     `chcp 65001 >nul\r\n` +
     `echo [%date% %time%] update batch started > "${logPath}"\r\n` +
-    `set /a waited=0\r\n` +
-    `:wait_for_exit\r\n` +
-    `tasklist /FI "IMAGENAME eq Open Design.exe" 2>nul | find /I "Open Design.exe" >nul\r\n` +
-    `if not errorlevel 1 (\r\n` +
-    `  if %waited% GEQ 60 (\r\n` +
-    `    echo [%date% %time%] timeout waiting for Open Design.exe; killing >> "${logPath}"\r\n` +
-    `    taskkill /F /IM "Open Design.exe" >nul 2>&1\r\n` +
-    `    timeout /t 1 /nobreak >nul\r\n` +
-    `    goto do_copy\r\n` +
-    `  )\r\n` +
-    `  set /a waited=waited+1\r\n` +
-    `  timeout /t 1 /nobreak >nul\r\n` +
-    `  goto wait_for_exit\r\n` +
-    `)\r\n` +
-    `:do_copy\r\n` +
-    `echo [%date% %time%] starting robocopy >> "${logPath}"\r\n` +
-    `robocopy "${unpackedDir}" "${installDir}" /E /MT:8 /R:3 /W:1 /NP /NJH /NJS /NDL /NFL >> "${logPath}" 2>&1\r\n` +
+    `echo [%date% %time%] force-killing any running Open Design >> "${logPath}"\r\n` +
+    `taskkill /F /IM "Open Design.exe" >nul 2>&1\r\n` +
+    `timeout /t 2 /nobreak >nul\r\n` +
+    `echo [%date% %time%] starting robocopy resources/ -> resources/ >> "${logPath}"\r\n` +
+    `robocopy "${srcResources}" "${destResources}" /E /MT:8 /R:3 /W:1 /NP /NJH /NJS /NDL /NFL >> "${logPath}" 2>&1\r\n` +
     `set RC=%ERRORLEVEL%\r\n` +
     `echo [%date% %time%] robocopy exit %RC% >> "${logPath}"\r\n` +
     `if %RC% GEQ 8 (\r\n` +
     `  echo [%date% %time%] robocopy failed, aborting >> "${logPath}"\r\n` +
     `  exit /b 1\r\n` +
     `)\r\n` +
-    `echo [%date% %time%] launching new app >> "${logPath}"\r\n` +
+    `echo [%date% %time%] launching app >> "${logPath}"\r\n` +
     `start "" "${exePath}"\r\n` +
     `rmdir /S /Q "${stagingDir}" 2>nul\r\n` +
     `(goto) 2>nul & del /F /Q "%~f0"\r\n`;
