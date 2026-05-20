@@ -16,6 +16,7 @@ import { PetOverlay } from './components/pet/PetOverlay';
 import { migrateCustomPetAtlas } from './components/pet/pets';
 import { ProjectView } from './components/ProjectView';
 import { WorkspaceTabsBar } from './components/WorkspaceTabsBar';
+import { ObsidianView } from './downstream/obsidian';
 import {
   DesignSystemCreationFlow,
   DesignSystemDetailView,
@@ -1158,6 +1159,8 @@ export function App() {
     appMain = <MarketplaceView />;
   } else if (route.kind === 'marketplace-detail') {
     appMain = <PluginDetailView pluginId={route.pluginId} />;
+  } else if (route.kind === 'obsidian') {
+    appMain = <ObsidianView />;
   } else if (route.kind === 'design-system-create') {
     appMain = (
       <DesignSystemCreationFlow

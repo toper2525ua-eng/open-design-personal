@@ -27,6 +27,12 @@ type WorkspaceChromeTab =
       pluginId: string | null;
       createdAt: number;
       lastActiveAt: number;
+    }
+  | {
+      id: string;
+      kind: 'obsidian';
+      createdAt: number;
+      lastActiveAt: number;
     };
 
 interface WorkspaceTabsState {
@@ -89,6 +95,14 @@ function tabFromRoute(route: Route, timestamp = Date.now()): WorkspaceChromeTab 
       lastActiveAt: timestamp,
     };
   }
+  if (route.kind === 'obsidian') {
+    return {
+      id: `obsidian:${nowId()}`,
+      kind: 'obsidian',
+      createdAt: timestamp,
+      lastActiveAt: timestamp,
+    };
+  }
   return createEntryTab(route.kind === 'home' ? route.view : 'design-systems', timestamp);
 }
 
@@ -105,6 +119,9 @@ function routeForTab(tab: WorkspaceChromeTab): Route {
     return tab.pluginId
       ? { kind: 'marketplace-detail', pluginId: tab.pluginId }
       : { kind: 'marketplace' };
+  }
+  if (tab.kind === 'obsidian') {
+    return { kind: 'obsidian' };
   }
   return { kind: 'home', view: tab.view };
 }
@@ -149,6 +166,14 @@ function reviveTab(value: unknown): WorkspaceChromeTab | null {
       lastActiveAt,
     };
   }
+  if (record.kind === 'obsidian') {
+    return {
+      id,
+      kind: 'obsidian',
+      createdAt,
+      lastActiveAt,
+    };
+  }
   return null;
 }
 
@@ -157,6 +182,7 @@ function uniqueIdForTab(tab: WorkspaceChromeTab): string {
   if (tab.kind === 'marketplace') {
     return `marketplace:${tab.pluginId ?? 'index'}:${nowId()}`;
   }
+  if (tab.kind === 'obsidian') return `obsidian:${nowId()}`;
   return `entry:${tab.view}:${nowId()}`;
 }
 
@@ -558,6 +584,15 @@ function displayTabFor(
       tab,
     };
   }
+  if (tab.kind === 'obsidian') {
+    return {
+      id: tab.id,
+      title: 'Обсидіан',
+      meta: 'База знань',
+      icon: 'pencil',
+      tab,
+    };
+  }
   const entryTitle: Record<EntryHomeView, string> = {
     home: t('entry.navHome'),
     projects: t('entry.navProjects'),
@@ -565,7 +600,6 @@ function displayTabFor(
     plugins: t('entry.navPlugins'),
     'design-systems': t('entry.navDesignSystems'),
     integrations: t('entry.navIntegrations'),
-    obsidian: 'Обсидіан',
   };
   const entryIcon: Record<EntryHomeView, IconName> = {
     home: 'home',
@@ -574,7 +608,6 @@ function displayTabFor(
     plugins: 'grid',
     'design-systems': 'palette',
     integrations: 'link',
-    obsidian: 'pencil',
   };
   return {
     id: tab.id,

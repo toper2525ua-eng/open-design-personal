@@ -1,0 +1,553 @@
+/* Obsidian-style knowledge base view. Phase A: visual skeleton only —
+   the file tree, content pane, chat stub and graph placeholder render
+   from `mock-data.ts`. The daemon-backed CRUD lands in Phase B.
+
+   This file owns ONLY obsidian-specific styling. The outer page shell
+   (`.app`, `.split`, `.split-chat-slot`, `.split-resize-handle`, `.pane`,
+   `.workspace`, `.ws-tabs-*`, `.viewer-*`, `.app-chrome-*`,
+   `.app-project-title*`, `.icon-only`) is inherited verbatim from
+   apps/web/src/index.css so the view matches ProjectView pixel-for-pixel.
+*/
+
+/* ---- Chat pane stub ----
+   The outer `<section>` uses `.pane` for the layout (flex column, fills
+   the split-chat-slot) and `.obsidian-chat` only for any obsidian-only
+   colors/spacing tweaks. */
+
+.obsidian-chat {
+  /* All layout already comes from `.pane`; this rule exists only to
+     namespace the descendant classes below. */
+}
+
+.obsidian-chat__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.obsidian-chat__head-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.obsidian-chat__head-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.obsidian-chat__head-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.obsidian-chat__head-btn:hover:not(:disabled) {
+  background: var(--bg-subtle);
+  color: var(--text);
+}
+.obsidian-chat__head-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.obsidian-chat__log {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.obsidian-chat__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 32px 8px;
+  gap: 8px;
+}
+.obsidian-chat__empty-title {
+  font-family: var(--serif);
+  font-size: 18px;
+  color: var(--text-strong);
+}
+.obsidian-chat__empty-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  max-width: 280px;
+}
+
+.obsidian-chat__suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin-top: 16px;
+  max-width: 360px;
+}
+.obsidian-chat__suggestion {
+  text-align: start;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+.obsidian-chat__suggestion:hover {
+  background: var(--bg-panel);
+  border-color: var(--border-strong);
+}
+.obsidian-chat__suggestion:active {
+  transform: scale(0.99);
+}
+
+.obsidian-chat__composer {
+  flex: 0 0 auto;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.obsidian-chat__textarea {
+  flex: 1 1 auto;
+  min-height: 36px;
+  max-height: 140px;
+  resize: none;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.4;
+  outline: none;
+  transition: border-color 120ms ease;
+}
+.obsidian-chat__textarea:focus {
+  border-color: var(--accent);
+}
+.obsidian-chat__send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: var(--accent-foreground, white);
+  cursor: pointer;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.obsidian-chat__send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.obsidian-chat__send:hover:not(:disabled) {
+  transform: scale(1.04);
+}
+
+/* ---- Workspace card ----
+   The outer `<section>` uses `.workspace` for layout (flex column, fills
+   the split's third column). `.obsidian-workspace` is reserved for any
+   obsidian-only tweaks (none right now — tab strip and toolbar inherit
+   project styling). */
+
+.obsidian-workspace {
+  /* Reserved namespace; layout comes from `.workspace`. */
+}
+
+/* ---- Vault: file tree + content ---- */
+
+.obsidian-vault {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 0;
+  background: var(--bg-panel);
+  overflow: hidden;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.obsidian-tree {
+  display: flex;
+  flex-direction: column;
+  border-inline-end: 1px solid var(--border);
+  background: var(--bg-subtle);
+  min-height: 0;
+}
+.obsidian-tree__head {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.obsidian-tree__title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-strong);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.obsidian-tree__list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 8px 6px;
+}
+
+.obsidian-tree__node {
+  display: flex;
+  flex-direction: column;
+}
+.obsidian-tree__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  background: transparent;
+  border: none;
+  width: 100%;
+  text-align: start;
+  font-family: inherit;
+  transition: background 120ms ease, color 120ms ease;
+}
+.obsidian-tree__row:hover {
+  background: var(--bg-panel);
+}
+.obsidian-tree__row.is-active {
+  background: var(--accent-subtle, rgba(99, 102, 241, 0.14));
+  color: var(--text-strong);
+  font-weight: 500;
+}
+.obsidian-tree__row-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+.obsidian-tree__row-label {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.obsidian-tree__children {
+  padding-inline-start: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* ---- Content pane (note viewer/editor/source) ---- */
+
+.obsidian-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-panel);
+}
+.obsidian-content__scroll {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.obsidian-content__body {
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 28px 32px 64px;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+/* Source view: raw markdown in a monospaced block, full-bleed. */
+.obsidian-content__source {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 20px 28px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bg-subtle);
+  border: none;
+  border-radius: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Edit view: textarea fills the content area, with a footer hint. */
+.obsidian-content__edit {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.obsidian-content__editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  resize: none;
+  padding: 20px 28px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bg-subtle);
+  border: none;
+  outline: none;
+}
+.obsidian-content__editor:focus {
+  background: var(--bg);
+}
+.obsidian-content__edit-hint {
+  flex: 0 0 auto;
+  padding: 8px 28px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-panel);
+}
+
+/* Inline markdown styling — minimal but readable. Replace with a proper
+   markdown renderer in Phase B once we ship real content. */
+.obsidian-content__body h1 {
+  font-family: var(--serif);
+  font-size: 28px;
+  margin: 0 0 16px;
+  color: var(--text-strong);
+  letter-spacing: -0.01em;
+}
+.obsidian-content__body h2 {
+  font-family: var(--serif);
+  font-size: 20px;
+  margin: 28px 0 12px;
+  color: var(--text-strong);
+}
+.obsidian-content__body h3 {
+  font-size: 15px;
+  margin: 20px 0 8px;
+  color: var(--text-strong);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.obsidian-content__body p {
+  margin: 0 0 12px;
+}
+.obsidian-content__body ul {
+  padding-inline-start: 22px;
+  margin: 0 0 12px;
+}
+.obsidian-content__body li {
+  margin: 4px 0;
+}
+.obsidian-content__body code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--bg-subtle);
+  color: var(--text-strong);
+}
+.obsidian-content__body pre {
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  overflow-x: auto;
+  margin: 0 0 16px;
+}
+.obsidian-content__body pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.obsidian-wikilink {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--accent);
+  padding-bottom: 1px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.obsidian-wikilink:hover {
+  background: var(--accent-subtle, rgba(99, 102, 241, 0.14));
+  color: var(--text-strong);
+}
+.obsidian-wikilink.is-broken {
+  color: var(--text-muted);
+  border-bottom-style: dotted;
+  cursor: not-allowed;
+}
+
+.obsidian-content__meta {
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  gap: 16px;
+}
+
+/* ---- Graph view ----
+   SVG-rendered force-directed graph. Parameters and color tokens mirror
+   Obsidian's defaults: --graph-node = muted text, --graph-line = subtle
+   border, --graph-node-focused = accent for active/hover. */
+
+.obsidian-graph {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  overflow: hidden;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.obsidian-graph__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.obsidian-graph__title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-strong);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.obsidian-graph__head-actions {
+  display: flex;
+  gap: 4px;
+}
+.obsidian-graph__head-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  transition: background 120ms ease, color 120ms ease;
+}
+.obsidian-graph__head-btn:hover {
+  background: var(--bg-subtle);
+  color: var(--text);
+}
+
+.obsidian-graph__canvas-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--bg);
+  overflow: hidden;
+}
+/* Absolute-position the SVG so its size is decoupled from its viewBox
+   aspect ratio. Without this the browser sizes the SVG to width:100% +
+   height implied by viewBox (e.g. 4:3) and overflows the parent. */
+.obsidian-graph__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.obsidian-graph__canvas.is-panning {
+  cursor: grabbing;
+}
+
+/* SVG presentation attributes (stroke/fill) can be brittle with CSS
+   `var()` in some browsers — use explicit hex/rgba fallbacks paired with
+   the theme variables. The line color is intentionally subtle so nodes
+   stay the focal point. */
+.obsidian-graph__edge {
+  stroke: rgba(140, 140, 140, 0.45);
+  stroke-width: 1;
+  transition: stroke 120ms ease, stroke-width 120ms ease;
+}
+.obsidian-graph__edge.is-highlighted {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.obsidian-graph__node {
+  cursor: pointer;
+}
+.obsidian-graph__node-circle {
+  fill: rgba(190, 190, 190, 0.85);
+  transition: fill 120ms ease;
+}
+.obsidian-graph__node.is-hover .obsidian-graph__node-circle {
+  fill: var(--accent);
+}
+.obsidian-graph__node-label {
+  fill: rgba(190, 190, 190, 0.75);
+  font-size: 9px;
+  font-family: var(--serif);
+  pointer-events: none;
+  transition: fill 120ms ease;
+}
+.obsidian-graph__node.is-hover .obsidian-graph__node-label {
+  fill: var(--text-strong);
+}
+
+.obsidian-graph__hint {
+  position: absolute;
+  inset-block-end: 10px;
+  inset-inline-end: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-panel);
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  pointer-events: none;
+  opacity: 0.85;
+}

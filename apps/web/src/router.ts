@@ -15,11 +15,11 @@ export type EntryHomeView =
   | 'tasks'
   | 'plugins'
   | 'design-systems'
-  | 'integrations'
-  | 'obsidian';
+  | 'integrations';
 
 export type Route =
   | { kind: 'home'; view: EntryHomeView }
+  | { kind: 'obsidian' }
   | { kind: 'design-system-create' }
   | { kind: 'design-system-detail'; designSystemId: string }
   | {
@@ -88,6 +88,9 @@ export function parseRoute(pathname: string): Route {
   if (parts[0] === 'integrations') {
     return { kind: 'home', view: 'integrations' };
   }
+  if (parts[0] === 'obsidian') {
+    return { kind: 'obsidian' };
+  }
   // Phase 2B / spec §11.6 — marketplace deep UI routes. Two paths:
   //   /marketplace            → catalog grid (MarketplaceView)
   //   /marketplace/<pluginId> → detail page (PluginDetailView)
@@ -111,6 +114,7 @@ export function buildPath(route: Route): string {
     if (route.view === 'integrations') return '/integrations';
     return '/';
   }
+  if (route.kind === 'obsidian') return '/obsidian';
   if (route.kind === 'marketplace') return '/marketplace';
   if (route.kind === 'marketplace-detail') return `/marketplace/${encodeURIComponent(route.pluginId)}`;
   if (route.kind === 'design-system-create') return '/design-systems/create';

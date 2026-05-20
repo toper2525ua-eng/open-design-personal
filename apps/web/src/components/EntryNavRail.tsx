@@ -16,6 +16,7 @@ import type { ReactNode } from 'react';
 import { EntryHelpMenu } from './EntryHelpMenu';
 import { Icon } from './Icon';
 import { useT } from '../i18n';
+import { navigate } from '../router';
 
 export type EntryView =
   | 'home'
@@ -23,8 +24,7 @@ export type EntryView =
   | 'tasks'
   | 'plugins'
   | 'design-systems'
-  | 'integrations'
-  | 'obsidian';
+  | 'integrations';
 
 interface Props {
   view: EntryView;
@@ -119,10 +119,12 @@ export function EntryNavRail({ view, onViewChange, onNewProject }: Props) {
           <Icon name="palette" size={18} />
         </NavButton>
         <NavButton
-          active={view === 'obsidian'}
           ariaLabel="Обсидіан"
           tooltip="Обсидіан"
-          onClick={() => onViewChange('obsidian')}
+          // Obsidian is a top-level route (kind === 'obsidian'), not an
+          // entry-shell sub-view, so it bypasses onViewChange and routes
+          // directly. EntryShell is unmounted while we're inside.
+          onClick={() => navigate({ kind: 'obsidian' })}
           testId="entry-nav-obsidian"
         >
           <Icon name="pencil" size={18} />
