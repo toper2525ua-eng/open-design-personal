@@ -30,6 +30,7 @@ const REPO = "toper2525ua-eng/open-design-personal";
 const POLL_INTERVAL_MS = 30 * 60 * 1000;
 const FIRST_CHECK_DELAY_MS = 10_000;
 const ZIP_ASSET_SUFFIX = "-win-unpacked.zip";
+const STATE_FILE_NAME = "auto-updater-state.json";
 
 interface GithubReleaseAsset {
   name: string;
@@ -105,8 +106,37 @@ async function unzipWithTar(zipPath: string, destDir: string): Promise<void> {
 
 let registered = false;
 let lastNotifiedTag: string | null = null;
+let statePath: string | null = null;
+let hydrationDone: Promise<void> = Promise.resolve();
+
+// Persist the "Later"-dismissed release tag across app restarts so the user
+// doesn't get re-prompted for the same release ~10s after every launch.
+// Newer releases break out automatically (their tag won't match this one).
+async function hydrateDismissedTag(): Promise<void> {
+  if (!statePath) return;
+  try {
+    const raw = await readFile(statePath, "utf-8");
+    const parsed = JSON.parse(raw) as { dismissedTag?: unknown };
+    if (typeof parsed.dismissedTag === "string") {
+      lastNotifiedTag = parsed.dismissedTag;
+    }
+  } catch {
+    // No state file yet, or unreadable — start clean.
+  }
+}
+
+async function persistDismissedTag(tag: string): Promise<void> {
+  if (!statePath) return;
+  try {
+    await mkdir(dirname(statePath), { recursive: true });
+    await writeFile(statePath, JSON.stringify({ dismissedTag: tag }), "utf-8");
+  } catch (err) {
+    console.warn(`[auto-updater] failed to persist dismissed tag: ${String(err)}`);
+  }
+}
 
 async function checkOnce(): Promise<void> {
+  await hydrationDone;
   const release = await fetchLatestRelease();
   if (!release) return;
   const remoteVersion = parseTag(release.tag_name);
@@ -132,7 +162,12 @@ async function checkOnce(): Promise<void> {
     defaultId: 0,
     cancelId: 1,
   });
-  if (result.response !== 0) return;
+  if (result.response !== 0) {
+    // User chose "Later" — remember it on disk so a quick relaunch (or any
+    // restart while this release is still latest) doesn't re-pester them.
+    await persistDismissedTag(release.tag_name);
+    return;
+  }
 
   try {
     await applyUpdate(zipAsset);
@@ -226,6 +261,9 @@ export function registerAutoUpdater(): void {
   if (!app.isPackaged) return;
   if (registered) return;
   registered = true;
+
+  statePath = join(app.getPath("userData"), STATE_FILE_NAME);
+  hydrationDone = hydrateDismissedTag();
 
   setTimeout(() => {
     void checkOnce();
