@@ -24,6 +24,16 @@ export function registerAutoUpdater(): void {
   if (registered) return;
   registered = true;
 
+  // electron-builder writes the publish config into `app-update.yml` which
+  // electron-updater normally reads at startup. But tools-pack runs builder
+  // with `--publish never` which skips that file. Set the feed manually so
+  // the updater knows where to look without any generated YAML.
+  autoUpdater.setFeedURL({
+    provider: "github",
+    owner: "toper2525ua-eng",
+    repo: "open-design-personal",
+  });
+
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
