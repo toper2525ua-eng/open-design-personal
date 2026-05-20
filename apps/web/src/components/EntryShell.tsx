@@ -57,6 +57,7 @@ import type {
 } from '../state/projects';
 import { TasksView } from './TasksView';
 import { Toast } from './Toast';
+import { ObsidianView } from '../downstream/obsidian';
 
 // The topbar chips (GitHub star, model switcher, Use everywhere)
 // collapse into the settings dropdown when the viewport gets
@@ -522,6 +523,7 @@ export function EntryShell({
                 onPersistComposioKey={onPersistComposioKey}
               />
             ) : null}
+            {view === 'obsidian' ? <ObsidianView /> : null}
           </div>
         </main>
       </div>

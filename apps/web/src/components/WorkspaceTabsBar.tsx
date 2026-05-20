@@ -565,6 +565,7 @@ function displayTabFor(
     plugins: t('entry.navPlugins'),
     'design-systems': t('entry.navDesignSystems'),
     integrations: t('entry.navIntegrations'),
+    obsidian: 'Обсидіан',
   };
   const entryIcon: Record<EntryHomeView, IconName> = {
     home: 'home',
@@ -573,6 +574,7 @@ function displayTabFor(
     plugins: 'grid',
     'design-systems': 'palette',
     integrations: 'link',
+    obsidian: 'pencil',
   };
   return {
     id: tab.id,

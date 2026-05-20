@@ -15,7 +15,8 @@ export type EntryHomeView =
   | 'tasks'
   | 'plugins'
   | 'design-systems'
-  | 'integrations';
+  | 'integrations'
+  | 'obsidian';
 
 export type Route =
   | { kind: 'home'; view: EntryHomeView }

@@ -23,7 +23,8 @@ export type EntryView =
   | 'tasks'
   | 'plugins'
   | 'design-systems'
-  | 'integrations';
+  | 'integrations'
+  | 'obsidian';
 
 interface Props {
   view: EntryView;
@@ -116,6 +117,15 @@ export function EntryNavRail({ view, onViewChange, onNewProject }: Props) {
           testId="entry-nav-design-systems"
         >
           <Icon name="palette" size={18} />
+        </NavButton>
+        <NavButton
+          active={view === 'obsidian'}
+          ariaLabel="Обсидіан"
+          tooltip="Обсидіан"
+          onClick={() => onViewChange('obsidian')}
+          testId="entry-nav-obsidian"
+        >
+          <Icon name="pencil" size={18} />
         </NavButton>
       </div>
       <div className="entry-nav-rail__footer">
