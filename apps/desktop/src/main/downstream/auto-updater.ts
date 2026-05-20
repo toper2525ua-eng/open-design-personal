@@ -161,26 +161,52 @@ async function applyUpdate(zipAsset: GithubReleaseAsset): Promise<void> {
 
   // Generate a self-deleting batch that swaps the install dir + relaunches.
   // Windows can't replace a running executable, so we wait for THIS process
-  // to exit, then xcopy from staging into the install dir.
+  // to exit, then robocopy from staging into the install dir.
+  //
+  // Robocopy is used instead of xcopy because the Next.js standalone bundle
+  // has paths well past Windows' MAX_PATH (260 chars), and xcopy fails with
+  // "Insufficient memory" on those. Robocopy handles long paths natively
+  // and supports up to ~32k-char paths via the kernel extended-length APIs.
+  //
+  // Robocopy exit codes are bit flags, not POSIX-style. Codes 0-7 are OK
+  // (files copied, mismatched, extra files etc.). Code 8+ means real
+  // failure. We treat >= 8 as fatal.
+  //
+  // The batch also writes a log file so post-mortem diagnosis works even
+  // if the spawned cmd window is invisible — never pause/wait for input.
   const batchPath = join(tmpRoot, `od-update-${Date.now()}.bat`);
+  const logPath = join(tmpRoot, `od-update-${Date.now()}.log`);
   const script =
     `@echo off\r\n` +
     `chcp 65001 >nul\r\n` +
+    `echo [%date% %time%] update batch started > "${logPath}"\r\n` +
+    `set /a waited=0\r\n` +
     `:wait_for_exit\r\n` +
     `tasklist /FI "IMAGENAME eq Open Design.exe" 2>nul | find /I "Open Design.exe" >nul\r\n` +
     `if not errorlevel 1 (\r\n` +
+    `  if %waited% GEQ 60 (\r\n` +
+    `    echo [%date% %time%] timeout waiting for Open Design.exe; killing >> "${logPath}"\r\n` +
+    `    taskkill /F /IM "Open Design.exe" >nul 2>&1\r\n` +
+    `    timeout /t 1 /nobreak >nul\r\n` +
+    `    goto do_copy\r\n` +
+    `  )\r\n` +
+    `  set /a waited=waited+1\r\n` +
     `  timeout /t 1 /nobreak >nul\r\n` +
     `  goto wait_for_exit\r\n` +
     `)\r\n` +
-    `xcopy /E /Y /I /Q "${unpackedDir}\\*" "${installDir}\\"\r\n` +
-    `if errorlevel 1 (\r\n` +
-    `  echo Update failed during file copy.\r\n` +
-    `  pause\r\n` +
+    `:do_copy\r\n` +
+    `echo [%date% %time%] starting robocopy >> "${logPath}"\r\n` +
+    `robocopy "${unpackedDir}" "${installDir}" /E /MT:8 /R:3 /W:1 /NP /NJH /NJS /NDL /NFL >> "${logPath}" 2>&1\r\n` +
+    `set RC=%ERRORLEVEL%\r\n` +
+    `echo [%date% %time%] robocopy exit %RC% >> "${logPath}"\r\n` +
+    `if %RC% GEQ 8 (\r\n` +
+    `  echo [%date% %time%] robocopy failed, aborting >> "${logPath}"\r\n` +
     `  exit /b 1\r\n` +
     `)\r\n` +
+    `echo [%date% %time%] launching new app >> "${logPath}"\r\n` +
     `start "" "${exePath}"\r\n` +
     `rmdir /S /Q "${stagingDir}" 2>nul\r\n` +
-    `del /F /Q "%~f0" 2>nul\r\n`;
+    `(goto) 2>nul & del /F /Q "%~f0"\r\n`;
   await writeFile(batchPath, script, "utf-8");
 
   // Run the batch detached so it survives our exit, then quit so the
