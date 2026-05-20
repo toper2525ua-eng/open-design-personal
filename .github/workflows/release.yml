@@ -104,6 +104,23 @@ jobs:
         run: Get-ChildItem ".tmp/tools-pack/out/win/namespaces/default/builder/" -File | Format-Table Name, Length
         shell: pwsh
 
+      - name: Package win-unpacked as ZIP for SAC-bypass installs
+        # Windows 11 Smart App Control blocks unsigned .exe installers.
+        # We work around that by also shipping the un-packed app as a
+        # plain ZIP — users (or the auto-updater) can extract it directly
+        # over %LOCALAPPDATA%\Programs\Open Design\ without ever running
+        # an unsigned executable, which bypasses SAC entirely.
+        run: |
+          $unpackedDir = ".tmp/tools-pack/out/win/namespaces/default/builder/win-unpacked"
+          $zipPath = ".tmp/tools-pack/out/win/namespaces/default/builder/Open.Design-win-unpacked.zip"
+          if (-not (Test-Path $unpackedDir)) {
+            Write-Error "win-unpacked dir missing"
+            exit 1
+          }
+          Compress-Archive -Path "$unpackedDir/*" -DestinationPath $zipPath -CompressionLevel Optimal -Force
+          Write-Host "ZIP size: $((Get-Item $zipPath).Length / 1MB) MB"
+        shell: pwsh
+
       - name: Normalize artifact filename for GitHub Releases
         # GitHub Releases rewrites spaces in asset names to dots on upload,
         # but electron-builder writes the original filename into latest.yml.
@@ -142,6 +159,7 @@ jobs:
             pick this release up within ~30 minutes and prompt you to restart.
           files: |
             .tmp/tools-pack/out/win/namespaces/default/builder/Open.Design-default-setup.exe
+            .tmp/tools-pack/out/win/namespaces/default/builder/Open.Design-win-unpacked.zip
             .tmp/tools-pack/out/win/namespaces/default/builder/latest.yml
           generate_release_notes: false
           fail_on_unmatched_files: true
