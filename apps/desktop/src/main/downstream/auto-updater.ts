@@ -7,30 +7,23 @@
 // `publish` block (provider: github, owner: toper2525ua-eng,
 // repo: open-design-personal) — electron-updater reads that from the
 // generated `app-update.yml` shipped inside the .exe.
+//
+// IMPORTANT: this uses a STATIC import for electron-updater so tools-pack's
+// esbuild bundler inlines it into resources/app/prebundled/packaged-main.mjs.
+// A dynamic `await import()` would fail at runtime in the packaged app because
+// tools-pack doesn't ship third-party node_modules — only the bundled .mjs.
 
 import { app, dialog } from "electron";
+import { autoUpdater } from "electron-updater";
 
 let registered = false;
 
-export async function registerAutoUpdater(): Promise<void> {
+export function registerAutoUpdater(): void {
   // Skip in non-packaged (dev) mode — there's no app to update there.
   if (!app.isPackaged) return;
   if (registered) return;
   registered = true;
 
-  // electron-updater is loaded dynamically so dev mode (where the package
-  // may not be installed yet) doesn't crash on import.
-  let autoUpdaterModule: typeof import("electron-updater") | null = null;
-  try {
-    autoUpdaterModule = await import("electron-updater");
-  } catch (err) {
-    // Module missing — log and skip silently. Build process should add it
-    // as a dependency; if it's gone, fall back to no-update behavior.
-    console.warn("[downstream/auto-updater] electron-updater not available:", err instanceof Error ? err.message : String(err));
-    return;
-  }
-
-  const { autoUpdater } = autoUpdaterModule;
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
