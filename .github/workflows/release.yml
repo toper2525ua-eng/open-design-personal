@@ -104,6 +104,28 @@ jobs:
         run: Get-ChildItem ".tmp/tools-pack/out/win/namespaces/default/builder/" -File | Format-Table Name, Length
         shell: pwsh
 
+      - name: Normalize artifact filename for GitHub Releases
+        # GitHub Releases rewrites spaces in asset names to dots on upload,
+        # but electron-builder writes the original filename into latest.yml.
+        # That mismatch makes electron-updater 404 when it tries to fetch
+        # the .exe. Rename the .exe + patch latest.yml so both agree.
+        run: |
+          $builderDir = ".tmp/tools-pack/out/win/namespaces/default/builder"
+          $oldExe = "$builderDir/Open Design-default-setup.exe"
+          $newExe = "$builderDir/Open.Design-default-setup.exe"
+          if (-not (Test-Path $oldExe)) {
+            Write-Error "Original .exe missing at $oldExe"
+            exit 1
+          }
+          Move-Item $oldExe $newExe
+          $latestYml = "$builderDir/latest.yml"
+          (Get-Content $latestYml -Raw) `
+            -replace 'Open Design-default-setup\.exe', 'Open.Design-default-setup.exe' `
+            | Set-Content $latestYml -NoNewline
+          Write-Host "=== Patched latest.yml ==="
+          Get-Content $latestYml
+        shell: pwsh
+
       - name: Upload as GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -113,13 +135,13 @@ jobs:
             Automated build from commit `${{ github.sha }}`.
 
             ## Install
-            Download `Open Design-default-setup.exe` below and run it.
+            Download `Open.Design-default-setup.exe` below and run it.
 
             ## Update
             If you already have an installed version, the auto-updater will
             pick this release up within ~30 minutes and prompt you to restart.
           files: |
-            .tmp/tools-pack/out/win/namespaces/default/builder/Open Design-default-setup.exe
+            .tmp/tools-pack/out/win/namespaces/default/builder/Open.Design-default-setup.exe
             .tmp/tools-pack/out/win/namespaces/default/builder/latest.yml
           generate_release_notes: false
           fail_on_unmatched_files: true
