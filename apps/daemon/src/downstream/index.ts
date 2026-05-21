@@ -30,6 +30,7 @@ import {
 } from './openrouter/index.js';
 
 import { registerTgWebRoutes } from './tg-web/routes.js';
+import { registerObsidianRoutes } from './obsidian/routes.js';
 
 import type { MediaModel, MediaProvider } from '../media-models.js';
 
@@ -57,6 +58,7 @@ export const downstreamEnvKeys: Record<string, string[]> = {
 // app. Called once from `server.ts:startServer()`.
 export function registerDownstreamRoutes(app: Express): void {
   registerTgWebRoutes(app);
+  registerObsidianRoutes(app);
 }
 
 export type {
@@ -67,3 +69,4 @@ export type {
   DownstreamProviderConfig,
   DownstreamRenderResult,
 } from './api.js';
+

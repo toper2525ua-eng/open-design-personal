@@ -31,7 +31,6 @@ import { navigate } from '../../router';
 import { ObsidianChatStub } from './ObsidianChatStub';
 import { ObsidianWorkspace } from './ObsidianWorkspace';
 
-const DEFAULT_NOTE_PATH = 'README';
 const RESIZE_HANDLE_WIDTH = 8;
 const CHAT_MIN_WIDTH = 280;
 const CHAT_MAX_WIDTH = 720;
@@ -58,7 +57,6 @@ function clampChatWidth(w: number): number {
 }
 
 export function ObsidianView() {
-  const [activePath, setActivePath] = useState<string>(DEFAULT_NOTE_PATH);
   const [chatWidth, setChatWidth] = useState<number>(readSavedChatWidth);
   const [resizing, setResizing] = useState(false);
   // Refs let the global pointer listeners see the latest start state
@@ -144,7 +142,7 @@ export function ObsidianView() {
           aria-label="Змінити ширину чату"
           onPointerDown={onResizeDown}
         />
-        <ObsidianWorkspace activePath={activePath} onSelect={setActivePath} />
+        <ObsidianWorkspace />
       </div>
     </div>
   );

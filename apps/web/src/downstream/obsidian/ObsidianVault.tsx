@@ -3,35 +3,45 @@
 // `ObsidianWorkspace.tsx`; this component just renders the tree + body
 // for the active note in the requested mode (preview / source / edit).
 //
-// Phase A renders mock data; Phase B will swap in a daemon-backed
-// `.od/obsidian-global/` filesystem and turn the textarea into a real
-// editor with save semantics.
+// Phase B reads from the daemon-backed `.od/obsidian-global/` vault
+// via the api.ts wrappers; the loading + caching strategy lives in
+// `ObsidianWorkspace.tsx` so this stays a presentation component.
 
 import { useState, type ReactNode } from 'react';
 
 import { Icon } from '../../components/Icon';
-import {
-  MOCK_NOTES,
-  MOCK_TREE,
-  resolveWikilink,
-  type ObsidianNote,
-  type ObsidianTreeNode,
-} from './mock-data';
+import type { ObsidianNote, ObsidianTreeNode } from './api';
 
 export type ObsidianViewMode = 'preview' | 'source' | 'edit';
 
 interface Props {
+  tree: ObsidianTreeNode[];
   activePath: string;
+  activeNote: ObsidianNote | null;
+  noteLoading: boolean;
+  noteError: string | null;
   onSelectTreeNode: (path: string) => void;
   onOpenWikilink: (path: string) => void;
   mode: ObsidianViewMode;
+  draft: string | null;
+  saving: boolean;
+  saveError: string | null;
+  onChangeDraft: (next: string) => void;
 }
 
 export function ObsidianVault({
+  tree,
   activePath,
+  activeNote,
+  noteLoading,
+  noteError,
   onSelectTreeNode,
   onOpenWikilink,
   mode,
+  draft,
+  saving,
+  saveError,
+  onChangeDraft,
 }: Props) {
   return (
     <div className="obsidian-vault" aria-label="Сховище нотаток">
@@ -41,7 +51,7 @@ export function ObsidianVault({
           <button
             type="button"
             className="obsidian-chat__head-btn"
-            title="Нова нотатка (буде у Фазі B)"
+            title="Нова нотатка (буде у Фазі B+)"
             aria-label="Нова нотатка"
             disabled
           >
@@ -49,7 +59,7 @@ export function ObsidianVault({
           </button>
         </div>
         <div className="obsidian-tree__list">
-          {MOCK_TREE.map((node) => (
+          {tree.map((node) => (
             <TreeNode
               key={node.path}
               node={node}
@@ -60,7 +70,18 @@ export function ObsidianVault({
           ))}
         </div>
       </aside>
-      <ObsidianNoteBody path={activePath} mode={mode} onOpenWikilink={onOpenWikilink} />
+      <ObsidianNoteBody
+        path={activePath}
+        note={activeNote}
+        loading={noteLoading}
+        error={noteError}
+        mode={mode}
+        draft={draft}
+        saving={saving}
+        saveError={saveError}
+        onChangeDraft={onChangeDraft}
+        onOpenWikilink={onOpenWikilink}
+      />
     </div>
   );
 }
@@ -69,60 +90,50 @@ export function ObsidianVault({
 // tree) and as the standalone content of a per-note workspace tab.
 interface ObsidianNoteBodyProps {
   path: string;
+  note: ObsidianNote | null;
+  loading: boolean;
+  error: string | null;
   mode: ObsidianViewMode;
+  draft: string | null;
+  saving: boolean;
+  saveError: string | null;
+  onChangeDraft: (next: string) => void;
   onOpenWikilink: (path: string) => void;
 }
 
-export function ObsidianNoteBody({ path, mode, onOpenWikilink }: ObsidianNoteBodyProps) {
-  const note: ObsidianNote | null = MOCK_NOTES[path] ?? null;
+export function ObsidianNoteBody({
+  path,
+  note,
+  loading,
+  error,
+  mode,
+  draft,
+  saving,
+  saveError,
+  onChangeDraft,
+  onOpenWikilink,
+}: ObsidianNoteBodyProps) {
   return (
     <main className="obsidian-content">
       <div className="obsidian-content__scroll">
-        {note ? renderNoteBody(note, mode, onOpenWikilink) : (
+        {loading && !note ? (
+          <article className="obsidian-content__body">
+            <p style={{ color: 'var(--text-muted)' }}>Завантаження нотатки…</p>
+          </article>
+        ) : error ? (
+          <article className="obsidian-content__body">
+            <p style={{ color: 'var(--accent)' }}>Помилка: {error}</p>
+            <p style={{ color: 'var(--text-muted)' }}>Шлях: {path}.md</p>
+          </article>
+        ) : note ? (
+          renderNoteBody(note, mode, draft, saving, saveError, onOpenWikilink, onChangeDraft)
+        ) : (
           <article className="obsidian-content__body">
             <p>Нотатка не знайдена.</p>
           </article>
         )}
       </div>
     </main>
-  );
-}
-
-function renderNoteBody(
-  note: ObsidianNote,
-  mode: ObsidianViewMode,
-  onNavigate: (path: string) => void,
-): ReactNode {
-  if (mode === 'source') {
-    return (
-      <pre className="obsidian-content__source">
-        <code>{note.content}</code>
-      </pre>
-    );
-  }
-  if (mode === 'edit') {
-    return (
-      <div className="obsidian-content__edit">
-        <textarea
-          className="obsidian-content__editor"
-          value={note.content}
-          readOnly
-          aria-label="Редактор (буде доступний у Фазі B)"
-        />
-        <div className="obsidian-content__edit-hint">
-          Редагування буде доступне у Фазі B (поки лише прев'ю).
-        </div>
-      </div>
-    );
-  }
-  return (
-    <article className="obsidian-content__body">
-      {renderMarkdown(note.content, onNavigate)}
-      <div className="obsidian-content__meta">
-        <span>Оновлено: {formatDate(note.updatedAt)}</span>
-        <span>Шлях: {note.path}.md</span>
-      </div>
-    </article>
   );
 }
 
@@ -134,8 +145,8 @@ interface TreeNodeProps {
 }
 
 function TreeNode({ node, activePath, onSelect, depth }: TreeNodeProps) {
-  // Folders default to expanded in Phase A. Once the vault gets bigger
-  // we'll persist expansion state per-folder.
+  // Folders default to expanded. Once the vault grows past a few dozen
+  // entries we'll persist per-folder expansion state.
   const [expanded, setExpanded] = useState(true);
 
   if (node.kind === 'note') {
@@ -204,8 +215,53 @@ function formatDate(iso: string): string {
   }
 }
 
-// Minimal markdown renderer: enough to make mock notes look right.
-// Replace with a proper renderer in Phase B once we ship real content.
+function renderNoteBody(
+  note: ObsidianNote,
+  mode: ObsidianViewMode,
+  draft: string | null,
+  saving: boolean,
+  saveError: string | null,
+  onNavigate: (path: string) => void,
+  onChangeDraft: (next: string) => void,
+): ReactNode {
+  if (mode === 'source') {
+    return (
+      <pre className="obsidian-content__source">
+        <code>{note.content}</code>
+      </pre>
+    );
+  }
+  if (mode === 'edit') {
+    const value = draft ?? note.content;
+    return (
+      <div className="obsidian-content__edit">
+        <textarea
+          className="obsidian-content__editor"
+          value={value}
+          onChange={(e) => onChangeDraft(e.target.value)}
+          disabled={saving}
+          aria-label="Редактор нотатки"
+        />
+        <div className="obsidian-content__edit-hint">
+          {saving ? 'Збереження…' : saveError ?? 'Зміни зберігаються кнопкою «Зберегти» зверху.'}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <article className="obsidian-content__body">
+      {renderMarkdown(note.content, onNavigate)}
+      <div className="obsidian-content__meta">
+        <span>Оновлено: {formatDate(note.updatedAt)}</span>
+        <span>Шлях: {note.path}.md</span>
+      </div>
+    </article>
+  );
+}
+
+// Minimal markdown renderer: headings, paragraphs, lists, fenced code,
+// inline code, [[wikilinks]]. Replace with a proper renderer once the
+// vault grows beyond hand-written notes.
 function renderMarkdown(source: string, onNavigate: (path: string) => void): ReactNode {
   const blocks = splitBlocks(source);
   return blocks.map((block, i) => renderBlock(block, i, onNavigate));
@@ -229,7 +285,6 @@ function splitBlocks(source: string): Block[] {
       continue;
     }
     if (line.startsWith('```')) {
-      // Fenced code block — collect until closing fence.
       const codeLines: string[] = [];
       i++;
       while (i < lines.length) {
@@ -238,7 +293,7 @@ function splitBlocks(source: string): Block[] {
         codeLines.push(next);
         i++;
       }
-      i++; // skip closing fence
+      i++;
       blocks.push({ kind: 'code', text: codeLines.join('\n') });
       continue;
     }
@@ -263,7 +318,6 @@ function splitBlocks(source: string): Block[] {
       blocks.push({ kind: 'list', text: '', items });
       continue;
     }
-    // Paragraph — collect contiguous non-empty, non-block lines.
     const paraLines: string[] = [line];
     i++;
     while (i < lines.length) {
@@ -308,9 +362,6 @@ function renderBlock(
   return <p key={key}>{renderInline(block.text, onNavigate, `p-${key}`)}</p>;
 }
 
-// Inline pass: handle [[wikilink]] and `code` spans. Order matters —
-// process wikilinks first so they can wrap text containing backticks if
-// future notes ever need that.
 function renderInline(
   source: string,
   onNavigate: (path: string) => void,
@@ -318,7 +369,6 @@ function renderInline(
 ): ReactNode {
   const out: ReactNode[] = [];
   let cursor = 0;
-  // Combined regex: [[name]] or `code`.
   const re = /\[\[([^\]]+)\]\]|`([^`]+)`/g;
   let match: RegExpExecArray | null;
   let chunkIdx = 0;
@@ -328,16 +378,15 @@ function renderInline(
     }
     if (match[1] !== undefined) {
       const name = match[1];
-      const resolved = resolveWikilink(name);
       out.push(
         <a
           key={`${keyPrefix}-w-${chunkIdx}`}
-          className={`obsidian-wikilink${resolved ? '' : ' is-broken'}`}
+          className="obsidian-wikilink"
           onClick={(e) => {
             e.preventDefault();
-            if (resolved) onNavigate(resolved);
+            onNavigate(name);
           }}
-          title={resolved ?? 'Нотатка не знайдена'}
+          title={name}
           href="#"
         >
           {name}

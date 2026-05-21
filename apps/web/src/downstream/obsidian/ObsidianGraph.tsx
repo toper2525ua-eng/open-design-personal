@@ -17,13 +17,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { buildGraphData } from './mock-data';
+import type { ObsidianGraphPayload } from './api';
 
 interface Props {
-  // Reserved for Phase B (e.g. subtle ring around the currently-open
-  // note) — currently unused after dropping the always-active orange
-  // highlight per UX feedback.
-  activePath?: string;
+  graph: ObsidianGraphPayload;
   onOpenNote: (path: string) => void;
 }
 
@@ -70,11 +67,7 @@ const RADIUS_PER_DEGREE = 1.4;
 const LABEL_OFFSET = 4;
 const INITIAL_VIEW: ViewBox = { x: -400, y: -300, w: 800, h: 600 };
 
-export function ObsidianGraph({ onOpenNote }: Props) {
-  // Build graph once — mock data is static. For Phase B this becomes a
-  // call to the daemon-backed graph endpoint and the simulation
-  // restarts on each change.
-  const graph = useMemo(() => buildGraphData(), []);
+export function ObsidianGraph({ graph, onOpenNote }: Props) {
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const nodesRef = useRef<SimNode[]>(initNodes(graph.nodes));

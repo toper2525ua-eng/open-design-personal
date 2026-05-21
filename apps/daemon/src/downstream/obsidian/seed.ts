@@ -1,19 +1,11 @@
-// Placeholder vault data used by the Phase A visual skeleton. The real
-// notes will be loaded from `.od/obsidian-global/` once the daemon API
-// is wired in Phase B. Until then this gives the file tree and content
-// pane realistic-looking material so we can refine the visual without
-// committing to a storage layer.
+// Initial vault content for `.od/obsidian-global/`. Written ONCE on
+// first run (when the folder is empty), then the user owns the
+// content — we never overwrite. Notes describe Open Design's
+// architecture, downstream features, and dev workflow; they double as
+// a working example of the wikilink + markdown rendering and as the
+// seed that future Claude-Code agents will read/extend.
 
-export type ObsidianTreeNode =
-  | { kind: 'folder'; name: string; path: string; children: ObsidianTreeNode[] }
-  | { kind: 'note'; name: string; path: string };
-
-export interface ObsidianNote {
-  path: string;
-  title: string;
-  content: string;
-  updatedAt: string;
-}
+import { isVaultEmpty, writeNote } from './storage.js';
 
 const README = `# Open Design — база знань
 
@@ -128,18 +120,20 @@ Downstream-фіча: вбудована Markdown-база знань всере�
 
 ## Розташування
 
-- \`apps/web/src/downstream/obsidian/\` — UI: ObsidianView, ObsidianVault, ObsidianGraph
-- \`apps/daemon/src/downstream/obsidian/\` — API (буде в Фазі B)
+- \`apps/web/src/downstream/obsidian/\` — UI: ObsidianView, ObsidianVault, ObsidianGraph, ObsidianWorkspace
+- \`apps/daemon/src/downstream/obsidian/\` — API: storage.ts, routes.ts, seed.ts
 
 ## Фази
 
-- **Фаза A** (поточна): візуальний скелет, 3-панельне розкладання, мок-дані
-- **Фаза B**: daemon API, реальні файли в \`.od/obsidian-global/\`, редагування
-- **Фаза C**: граф-вʼю, інтеграція Claude-чату, per-project обсидіан
+- **Фаза A** ✓ візуальний скелет, 3-панельне розкладання, граф з force-сімуляцією
+- **Фаза B** (поточна): daemon API, реальні файли в \`.od/obsidian-global/\`, редагування
+- **Фаза C**: Claude Code CLI як чат-бекенд + tools для пошуку в коді
+- **Фаза D**: фоновий індексер репозиторію + смужка покриття
 
 ## Інтеграція
 
-Кнопка у [[EntryNavRail]] + route slot у EntryShell.
+Окремий top-level route \`{ kind: 'obsidian' }\` (НЕ entry sub-view).
+Кнопка \`navigate({ kind: 'obsidian' })\` в [[EntryNavRail]] + dispatch у App.tsx.
 `;
 
 const AUTO_UPDATER = `# Auto-updater
@@ -212,171 +206,25 @@ pnpm tools-pack win install
 - [[Auto-updater]] — як build стає оновленням
 `;
 
-export const MOCK_NOTES: Record<string, ObsidianNote> = {
-  'README': {
-    path: 'README',
-    title: 'README',
-    content: README,
-    updatedAt: '2026-05-20T17:25:00Z',
-  },
-  'Архітектура/apps-web': {
-    path: 'Архітектура/apps-web',
-    title: 'apps/web',
-    content: APPS_WEB,
-    updatedAt: '2026-05-20T17:25:00Z',
-  },
-  'Архітектура/apps-daemon': {
-    path: 'Архітектура/apps-daemon',
-    title: 'apps/daemon',
-    content: APPS_DAEMON,
-    updatedAt: '2026-05-20T17:25:00Z',
-  },
-  'Архітектура/apps-desktop': {
-    path: 'Архітектура/apps-desktop',
-    title: 'apps/desktop',
-    content: APPS_DESKTOP,
-    updatedAt: '2026-05-20T17:25:00Z',
-  },
-  'Downstream/OpenRouter': {
-    path: 'Downstream/OpenRouter',
-    title: 'OpenRouter',
-    content: OPENROUTER,
-    updatedAt: '2026-05-20T17:25:00Z',
-  },
-  'Downstream/TG Web': {
-    path: 'Downstream/TG Web',
-    title: 'TG Web',
-    content: TG_WEB,
-    updatedAt: '2026-05-20T17:25:00Z',
-  },
-  'Downstream/Obsidian': {
-    path: 'Downstream/Obsidian',
-    title: 'Obsidian',
-    content: OBSIDIAN_NOTE,
-    updatedAt: '2026-05-20T17:25:00Z',
-  },
-  'Downstream/Auto-updater': {
-    path: 'Downstream/Auto-updater',
-    title: 'Auto-updater',
-    content: AUTO_UPDATER,
-    updatedAt: '2026-05-20T17:25:00Z',
-  },
-  'Розробка/Workflow': {
-    path: 'Розробка/Workflow',
-    title: 'Workflow',
-    content: WORKFLOW,
-    updatedAt: '2026-05-20T17:25:00Z',
-  },
-  'Розробка/Build': {
-    path: 'Розробка/Build',
-    title: 'Build',
-    content: BUILD,
-    updatedAt: '2026-05-20T17:25:00Z',
-  },
-};
-
-export const MOCK_TREE: ObsidianTreeNode[] = [
-  { kind: 'note', name: 'README', path: 'README' },
-  {
-    kind: 'folder',
-    name: 'Архітектура',
-    path: 'Архітектура',
-    children: [
-      { kind: 'note', name: 'apps/web', path: 'Архітектура/apps-web' },
-      { kind: 'note', name: 'apps/daemon', path: 'Архітектура/apps-daemon' },
-      { kind: 'note', name: 'apps/desktop', path: 'Архітектура/apps-desktop' },
-    ],
-  },
-  {
-    kind: 'folder',
-    name: 'Downstream',
-    path: 'Downstream',
-    children: [
-      { kind: 'note', name: 'Auto-updater', path: 'Downstream/Auto-updater' },
-      { kind: 'note', name: 'Obsidian', path: 'Downstream/Obsidian' },
-      { kind: 'note', name: 'OpenRouter', path: 'Downstream/OpenRouter' },
-      { kind: 'note', name: 'TG Web', path: 'Downstream/TG Web' },
-    ],
-  },
-  {
-    kind: 'folder',
-    name: 'Розробка',
-    path: 'Розробка',
-    children: [
-      { kind: 'note', name: 'Build', path: 'Розробка/Build' },
-      { kind: 'note', name: 'Workflow', path: 'Розробка/Workflow' },
-    ],
-  },
+const SEED: { path: string; content: string }[] = [
+  { path: 'README', content: README },
+  { path: 'Архітектура/apps-web', content: APPS_WEB },
+  { path: 'Архітектура/apps-daemon', content: APPS_DAEMON },
+  { path: 'Архітектура/apps-desktop', content: APPS_DESKTOP },
+  { path: 'Downstream/OpenRouter', content: OPENROUTER },
+  { path: 'Downstream/TG Web', content: TG_WEB },
+  { path: 'Downstream/Obsidian', content: OBSIDIAN_NOTE },
+  { path: 'Downstream/Auto-updater', content: AUTO_UPDATER },
+  { path: 'Розробка/Workflow', content: WORKFLOW },
+  { path: 'Розробка/Build', content: BUILD },
 ];
 
-// Resolve a wikilink target (e.g. `[[apps-web]]` or `[[apps/web]]`) to a
-// real note path. The skeleton tolerates partial matches so authors don't
-// have to type the full folder path.
-export function resolveWikilink(name: string): string | null {
-  const target = name.trim();
-  if (!target) return null;
-  if (MOCK_NOTES[target]) return target;
-  // Match by basename (after the last `/`) — case-insensitive.
-  const lowered = target.toLowerCase();
-  for (const path of Object.keys(MOCK_NOTES)) {
-    const last = path.split('/').pop() ?? path;
-    if (last.toLowerCase() === lowered) return path;
+export async function seedVaultIfEmpty(): Promise<{ seeded: boolean; count: number }> {
+  if (!(await isVaultEmpty())) {
+    return { seeded: false, count: 0 };
   }
-  return null;
-}
-
-// Pull every `[[name]]` reference out of a note body, resolving each to a
-// real path via `resolveWikilink`. Unresolved links are dropped — they
-// would render as broken edges and just add noise to the graph view.
-export function extractWikilinks(content: string): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  const re = /\[\[([^\]]+)\]\]/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(content)) !== null) {
-    const name = match[1];
-    if (!name) continue;
-    const resolved = resolveWikilink(name);
-    if (!resolved) continue;
-    if (seen.has(resolved)) continue;
-    seen.add(resolved);
-    out.push(resolved);
+  for (const note of SEED) {
+    await writeNote(note.path, note.content);
   }
-  return out;
-}
-
-export interface ObsidianGraphData {
-  nodes: { id: string; label: string; degree: number }[];
-  edges: { source: string; target: string }[];
-}
-
-// Build a graph view of the vault: one node per note, one undirected edge
-// per resolved wikilink (deduped both ways so A→B and B→A become one edge).
-// `degree` drives the node radius — central hubs read as bigger circles.
-export function buildGraphData(): ObsidianGraphData {
-  const nodes = Object.values(MOCK_NOTES).map((note) => ({
-    id: note.path,
-    label: note.title,
-    degree: 0,
-  }));
-  const nodeIndex = new Map(nodes.map((n) => [n.id, n]));
-  const edgeKeys = new Set<string>();
-  const edges: ObsidianGraphData['edges'] = [];
-  for (const note of Object.values(MOCK_NOTES)) {
-    const targets = extractWikilinks(note.content);
-    for (const target of targets) {
-      if (target === note.path) continue;
-      const a = note.path < target ? note.path : target;
-      const b = note.path < target ? target : note.path;
-      const key = `${a} ${b}`;
-      if (edgeKeys.has(key)) continue;
-      edgeKeys.add(key);
-      edges.push({ source: a, target: b });
-      const sourceNode = nodeIndex.get(a);
-      const targetNode = nodeIndex.get(b);
-      if (sourceNode) sourceNode.degree += 1;
-      if (targetNode) targetNode.degree += 1;
-    }
-  }
-  return { nodes, edges };
+  return { seeded: true, count: SEED.length };
 }
