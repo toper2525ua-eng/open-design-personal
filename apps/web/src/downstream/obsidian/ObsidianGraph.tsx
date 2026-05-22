@@ -50,22 +50,46 @@ interface ViewBox {
   h: number;
 }
 
-// Obsidian defaults — see app.js search hits in commit notes.
-// Strengths bumped over the raw Obsidian defaults so our tiny 10-node
-// vault doesn't clump in the middle — with this few nodes the
-// inverse-square repulsion needs more headroom to push them apart.
-const CENTER_STRENGTH = 0.08;
-const REPEL_STRENGTH = 35;
-const LINK_STRENGTH = 1;
-const LINK_DISTANCE = 130;
-const FRICTION = 0.7;
-const MIN_VELOCITY = 0.01;
-const MAX_STEPS = 600;
+// Layout parameters tuned to mirror Obsidian's graph view character:
+// strong inverse-square repulsion, gentle centering, soft springs along
+// edges, AND a collision pass so circles never overlap visually. The
+// constants below are intentionally close to Obsidian's app.js defaults
+// (centerStrength≈0.5 raw → applied as ×0.05 step factor; repelStrength
+// large → broken out into REPEL_K below; linkDistance≈250).
+//
+// We scale the effective strengths by graph size at simulation time —
+// see effectiveParams() — so a 10-node mock vault doesn't drift to the
+// horizon while a 200-node real vault doesn't clump into a black hole.
+const CENTER_STRENGTH = 0.04;       // gentle pull toward origin
+const REPEL_K = 1800;               // numerator of inverse-square force
+const LINK_STRENGTH = 0.5;          // 0..1: how rigidly springs pull
+const LINK_DISTANCE = 180;          // target resting length for an edge
+const COLLISION_PADDING = 6;        // extra space between node circles
+const FRICTION = 0.78;              // velocity damping per tick
+const MIN_VELOCITY = 0.02;
+const MAX_STEPS = 1500;
+const INITIAL_SETTLE_STEPS = 250;   // synchronous pre-render iterations
 
 const BASE_RADIUS = 4;
 const RADIUS_PER_DEGREE = 1.4;
 const LABEL_OFFSET = 4;
 const INITIAL_VIEW: ViewBox = { x: -400, y: -300, w: 800, h: 600 };
+
+// Effective parameters depend on graph size. A bigger graph needs
+// proportionally stronger repulsion and a weaker centering force, or
+// nodes pile up in the middle.
+function effectiveParams(nodeCount: number): {
+  centerStrength: number;
+  repelK: number;
+  linkDistance: number;
+} {
+  const scale = Math.max(1, Math.sqrt(nodeCount / 10));
+  return {
+    centerStrength: CENTER_STRENGTH / scale,
+    repelK: REPEL_K * scale,
+    linkDistance: LINK_DISTANCE * (0.85 + 0.25 * Math.log10(nodeCount + 1)),
+  };
+}
 
 export function ObsidianGraph({ graph, onOpenNote }: Props) {
 
@@ -149,6 +173,18 @@ export function ObsidianGraph({ graph, onOpenNote }: Props) {
       }, 4000);
     }
     stepRef.current = 0;
+
+    // Synchronously pre-settle the layout on first mount so users never
+    // see the "everything in one ball" frame. Without this the RAF loop
+    // at ~30fps needs ~5-10 seconds of visible thrashing for a 50+ node
+    // graph to spread out. With it, the first paint already shows a
+    // reasonable arrangement and RAF only polishes.
+    if (prevById.size === 0 && nodesRef.current.length > 0) {
+      for (let i = 0; i < INITIAL_SETTLE_STEPS; i++) {
+        if (tickSimulation(nodesRef.current, edgesRef.current)) break;
+      }
+    }
+
     // Only auto-fit if the user hasn't interacted with the view yet AND
     // this is the first time we get any nodes (initial layout). On
     // subsequent live refreshes we keep the user's current view stable.
@@ -413,7 +449,7 @@ export function ObsidianGraph({ graph, onOpenNote }: Props) {
           </g>
           <g className="obsidian-graph__nodes">
             {nodes.map((node) => {
-              const r = BASE_RADIUS + node.degree * RADIUS_PER_DEGREE;
+              const r = nodeRadius(node.degree);
               const isHover = node.id === hoverId;
               const isRecent = recentlyAddedIds.has(node.id);
               return (
@@ -463,22 +499,43 @@ export function ObsidianGraph({ graph, onOpenNote }: Props) {
 }
 
 function initNodes(input: { id: string; label: string; degree: number }[]): SimNode[] {
-  // Distribute initial positions on a circle so the first tick doesn't
-  // explode when nodes start co-located (Coulomb force → ∞ at distance 0).
-  const radius = Math.max(120, input.length * 20);
-  return input.map((node, i) => {
-    const angle = (i / Math.max(1, input.length)) * Math.PI * 2;
-    return {
-      id: node.id,
-      label: node.label,
-      degree: node.degree,
-      x: Math.cos(angle) * radius,
-      y: Math.sin(angle) * radius,
-      vx: 0,
-      vy: 0,
-      fixed: false,
-    };
-  });
+  // Sort by degree descending so the highest-degree hubs end up near
+  // the center of the seed pattern — they'll attract their satellites
+  // outward from there and the layout settles cleanly. Use a Vogel
+  // spiral (golden-angle) so the initial arrangement spreads evenly
+  // instead of stacking pairs at antipodal points like a plain circle.
+  const sorted = input
+    .map((n, originalIndex) => ({ n, originalIndex }))
+    .sort((a, b) => b.n.degree - a.n.degree);
+  const n = sorted.length;
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  const spacing = Math.max(22, 220 / Math.sqrt(Math.max(n, 1)));
+  return sorted
+    .map(({ n: node, originalIndex }, i) => {
+      const r = spacing * Math.sqrt(i + 0.5);
+      const angle = i * goldenAngle;
+      return {
+        originalIndex,
+        node: {
+          id: node.id,
+          label: node.label,
+          degree: node.degree,
+          x: Math.cos(angle) * r,
+          y: Math.sin(angle) * r,
+          vx: 0,
+          vy: 0,
+          fixed: false,
+        } as SimNode,
+      };
+    })
+    // Preserve original input ordering so the rest of the rendering
+    // (key indices, hover indices) doesn't reshuffle.
+    .sort((a, b) => a.originalIndex - b.originalIndex)
+    .map((e) => e.node);
+}
+
+function nodeRadius(degree: number): number {
+  return BASE_RADIUS + degree * RADIUS_PER_DEGREE;
 }
 
 // One simulation step. Returns true when the layout is settled (all
@@ -486,23 +543,29 @@ function initNodes(input: { id: string; label: string; degree: number }[]): SimN
 // Fixed nodes still exert forces on others but don't accumulate
 // velocity themselves — useful when the user is actively dragging.
 function tickSimulation(nodes: SimNode[], edges: SimEdge[]): boolean {
-  // 1. Repulsion: every pair of nodes pushes apart inverse-square.
+  const { centerStrength, repelK, linkDistance } = effectiveParams(nodes.length);
+
+  // 1. Repulsion: every pair pushes apart inverse-square. Force is
+  //    softened by repelK / dist² with a minimum distance clamp so very
+  //    close pairs don't explode the integrator. This produces the
+  //    "exploded" Obsidian look where unrelated subgraphs drift apart.
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
       const a = nodes[i]!;
       const b = nodes[j]!;
       const dx = b.x - a.x;
       const dy = b.y - a.y;
-      const distSq = Math.max(dx * dx + dy * dy, 1);
-      const force = (REPEL_STRENGTH * 100) / distSq;
+      const distSq = Math.max(dx * dx + dy * dy, 25);
       const dist = Math.sqrt(distSq);
+      const force = repelK / distSq;
       const fx = (dx / dist) * force;
       const fy = (dy / dist) * force;
       if (!a.fixed) { a.vx -= fx; a.vy -= fy; }
       if (!b.fixed) { b.vx += fx; b.vy += fy; }
     }
   }
-  // 2. Spring along edges: pull connected nodes toward LINK_DISTANCE.
+
+  // 2. Springs along edges: pull connected nodes toward linkDistance.
   const nodeIndex = new Map(nodes.map((n) => [n.id, n]));
   for (const edge of edges) {
     const a = nodeIndex.get(edge.source);
@@ -511,20 +574,45 @@ function tickSimulation(nodes: SimNode[], edges: SimEdge[]): boolean {
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-    const displacement = dist - LINK_DISTANCE;
+    const displacement = dist - linkDistance;
     const force = displacement * LINK_STRENGTH * 0.05;
     const fx = (dx / dist) * force;
     const fy = (dy / dist) * force;
     if (!a.fixed) { a.vx += fx; a.vy += fy; }
     if (!b.fixed) { b.vx -= fx; b.vy -= fy; }
   }
-  // 3. Centering: gentle pull toward origin so the cluster stays put.
+
+  // 3. Centering: gentle pull toward origin so the cluster stays in
+  //    frame. Linear-in-distance instead of inverse-square so distant
+  //    outliers come back without yanking the bulk to a single point.
   for (const n of nodes) {
     if (n.fixed) continue;
-    n.vx -= n.x * CENTER_STRENGTH * 0.05;
-    n.vy -= n.y * CENTER_STRENGTH * 0.05;
+    n.vx -= n.x * centerStrength * 0.05;
+    n.vy -= n.y * centerStrength * 0.05;
   }
-  // 4. Integrate position + friction.
+
+  // 4. Collision: hard radius-based push so dots never visually
+  //    overlap. This is the missing force that makes Obsidian's graph
+  //    look "clean" — without it big hubs and their neighbors stack.
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i]!;
+      const b = nodes[j]!;
+      const minDist = nodeRadius(a.degree) + nodeRadius(b.degree) + COLLISION_PADDING;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const distSq = dx * dx + dy * dy;
+      if (distSq >= minDist * minDist) continue;
+      const dist = Math.sqrt(distSq) || 0.1;
+      const overlap = (minDist - dist) * 0.5;
+      const nx = dx / dist;
+      const ny = dy / dist;
+      if (!a.fixed) { a.x -= nx * overlap; a.y -= ny * overlap; }
+      if (!b.fixed) { b.x += nx * overlap; b.y += ny * overlap; }
+    }
+  }
+
+  // 5. Integrate position + friction.
   let maxV = 0;
   for (const n of nodes) {
     if (n.fixed) {
