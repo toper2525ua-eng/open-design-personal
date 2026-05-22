@@ -564,6 +564,16 @@ const TIER3_SKIP_PATH_PATTERNS = [
   /[\\/]__mocks__[\\/]/,
   // Locale dictionaries — translated copy strings, not narrative.
   /[\\/]locales[\\/][a-z]{2}([-_][A-Z]{2})?\.json$/,
+  // The Open Design "catalog" subtrees that ship with the packaged
+  // app — design systems, templates, plugins, skills, prompts,
+  // community content. These are PRODUCT CONTENT, not program code:
+  // each subdir is self-describing through its own manifest, and the
+  // user already has top-level overview notes covering them as
+  // groups. Per-leaf-file claude spawns just rediscover what the
+  // overview already says. Saves ~2300 spawns on a packaged-app
+  // queue. Keep `craft/` and `frames/` (small, structural — actually
+  // worth per-file documentation).
+  /[\\/]open-design[\\/](design-systems|design-templates|plugins|prompt-templates|skills|community-pets)[\\/]/,
 ];
 
 function isTier3Skippable(abs: string): boolean {
