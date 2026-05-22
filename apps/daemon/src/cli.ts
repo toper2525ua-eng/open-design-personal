@@ -204,6 +204,50 @@ if (argv[0] === 'mcp' && argv[1] === 'live-artifacts') {
   }
 }
 
+// Downstream fork: `od mcp obsidian` — stdio MCP server that exposes
+// the local Obsidian knowledge base (full-text search, note read,
+// backlinks, source→note lookup, indexer status) to any outer Claude
+// Code / Cursor / Zed session via a static stdio command. The daemon
+// must be running locally; the MCP process is a thin HTTP proxy and
+// re-resolves the daemon URL at startup so MCP client configs stay
+// valid across daemon restarts.
+if (argv[0] === 'mcp' && argv[1] === 'obsidian') {
+  try {
+    const rest = argv.slice(2);
+    const flags = parseFlags(rest, {
+      string: MCP_STRING_FLAGS,
+      boolean: MCP_BOOLEAN_FLAGS,
+    });
+    if (flags.help || flags.h) {
+      console.log(`Usage: od mcp obsidian [--daemon-url <url>]
+
+Run a stdio MCP server that exposes the Obsidian knowledge base to any
+outer Claude Code / Cursor / Zed session. Tools: obsidian_search,
+obsidian_read, obsidian_list_categories, obsidian_backlinks,
+obsidian_note_for_source, obsidian_indexer_status.
+
+Wire into ~/.claude/mcp_servers.json (or the Cursor / Zed equivalent):
+  {
+    "mcpServers": {
+      "obsidian": {
+        "command": "od",
+        "args": ["mcp", "obsidian"]
+      }
+    }
+  }`);
+      process.exit(0);
+    }
+    const daemonUrl = await cliDaemonUrl(flags);
+    const { runObsidianMcpStdio } = await import('./downstream/obsidian/mcp.js');
+    await runObsidianMcpStdio({ daemonUrl });
+    process.exit(0);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${JSON.stringify({ ok: false, error: { message } })}\n`);
+    process.exit(1);
+  }
+}
+
 const first = argv.find((a) => !a.startsWith('-'));
 if (first && SUBCOMMAND_MAP[first]) {
   const idx = argv.indexOf(first);
@@ -252,6 +296,11 @@ function printRootHelp() {
 
   od mcp live-artifacts
       Start the MCP server exposing live-artifact and connector tools.
+
+  od mcp obsidian [--daemon-url <url>]
+      Stdio MCP server exposing the local Obsidian knowledge base
+      (search / read / backlinks / source→note / indexer status) to any
+      outer Claude Code / Cursor / Zed session. Daemon must be running.
 
   od research search --query <text> [--max-sources 5] [--daemon-url <url>]
       Run agent-callable Tavily research through the local daemon.

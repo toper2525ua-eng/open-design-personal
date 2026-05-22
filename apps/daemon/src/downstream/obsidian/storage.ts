@@ -23,6 +23,7 @@ import {
 import path from 'node:path';
 
 const VAULT_DIRNAME = path.join('.od', 'obsidian-global');
+const ATTACHMENTS_DIRNAME = '.attachments';
 const NOTE_EXT = '.md';
 
 export interface ObsidianNoteRecord {
@@ -40,8 +41,18 @@ export function vaultRoot(): string {
   return path.resolve(process.cwd(), VAULT_DIRNAME);
 }
 
+export function attachmentsRoot(): string {
+  return path.join(vaultRoot(), ATTACHMENTS_DIRNAME);
+}
+
 export async function ensureVaultRoot(): Promise<string> {
   const root = vaultRoot();
+  await mkdir(root, { recursive: true });
+  return root;
+}
+
+export async function ensureAttachmentsRoot(): Promise<string> {
+  const root = attachmentsRoot();
   await mkdir(root, { recursive: true });
   return root;
 }
@@ -120,6 +131,17 @@ export async function writeNote(notePath: string, content: string): Promise<Obsi
   await writeFile(abs, content, 'utf-8');
   const stats = await stat(abs);
   const baseName = path.basename(abs, NOTE_EXT);
+  // Keep the source-map in sync so reverse lookups (file → note)
+  // continue working without a manual reindex step.
+  await updateSourceMapFromNote(notePath, content);
+  // Coalesced master TOC rebuild — the agent reads it as its first
+  // grounding step so it must reflect every write within ~500ms.
+  // Avoid recursive rebuild if THIS write is the TOC itself.
+  if (notePath !== 'README') {
+    // Lazy-require to avoid a static import cycle (toc.ts imports
+    // listAllNotes from this file).
+    void import('./toc.js').then((m) => m.scheduleTocRebuild()).catch(() => undefined);
+  }
   return {
     path: notePath,
     title: titleFromContent(content, baseName),
@@ -132,6 +154,7 @@ export async function deleteNote(notePath: string): Promise<boolean> {
   const abs = resolveSafePath(notePath);
   try {
     await rm(abs);
+    await pruneSourceMapForNote(notePath);
     return true;
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
@@ -179,6 +202,85 @@ async function readDir(absDir: string): Promise<ObsidianTreeNode[]> {
   return out;
 }
 
+// --- Source-map (P2) ---
+//
+// Reverse lookup table: source-file path → note path. Populated by the
+// indexer + by manual note saves (via updateSourceMapFromNote below).
+// Persisted to `.od/obsidian-global/.source-map.json` so a daemon
+// restart doesn't lose it. Exposed via /note-for-source endpoint and
+// the obsidian_note_for_source MCP tool.
+
+const SOURCE_MAP_FILENAME = '.source-map.json';
+let sourceMapCache: Record<string, string> | null = null;
+
+function sourceMapPath(): string {
+  return path.join(vaultRoot(), SOURCE_MAP_FILENAME);
+}
+
+async function loadSourceMap(): Promise<Record<string, string>> {
+  if (sourceMapCache) return sourceMapCache;
+  try {
+    const raw = await readFile(sourceMapPath(), 'utf-8');
+    const parsed = JSON.parse(raw) as unknown;
+    sourceMapCache = (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+      ? parsed as Record<string, string>
+      : {};
+  } catch {
+    sourceMapCache = {};
+  }
+  return sourceMapCache;
+}
+
+async function saveSourceMap(): Promise<void> {
+  if (!sourceMapCache) return;
+  try {
+    await mkdir(vaultRoot(), { recursive: true });
+    await writeFile(sourceMapPath(), JSON.stringify(sourceMapCache, null, 2), 'utf-8');
+  } catch {
+    // Best-effort.
+  }
+}
+
+export async function readNotePathForSource(sourceFile: string): Promise<string | null> {
+  const map = await loadSourceMap();
+  const normalized = sourceFile.replace(/\\/g, '/').replace(/^\.\//, '');
+  return map[normalized] ?? null;
+}
+
+// Parse a note body for `<!-- sourceFile: X -->` markers and add them
+// to the source-map. Called whenever a note is written (manual save
+// via UI OR via the indexer agent's Write/Edit).
+export async function updateSourceMapFromNote(notePath: string, content: string): Promise<void> {
+  const map = await loadSourceMap();
+  const re = /<!--\s*sourceFile:\s*([^\s>][^>]*?)\s*-->/g;
+  let match: RegExpExecArray | null;
+  let changed = false;
+  while ((match = re.exec(content)) !== null) {
+    const raw = match[1];
+    if (!raw) continue;
+    const src = raw.trim().replace(/\\/g, '/').replace(/^\.\//, '');
+    if (map[src] !== notePath) {
+      map[src] = notePath;
+      changed = true;
+    }
+  }
+  if (changed) await saveSourceMap();
+}
+
+// Drop source-map entries that point to a deleted note. Used by
+// deleteNote so orphan map entries don't accumulate.
+export async function pruneSourceMapForNote(notePath: string): Promise<void> {
+  const map = await loadSourceMap();
+  let changed = false;
+  for (const [src, target] of Object.entries(map)) {
+    if (target === notePath) {
+      delete map[src];
+      changed = true;
+    }
+  }
+  if (changed) await saveSourceMap();
+}
+
 export async function isVaultEmpty(): Promise<boolean> {
   await ensureVaultRoot();
   const entries = await readdir(vaultRoot());
@@ -195,6 +297,75 @@ export async function listAllNotes(): Promise<ObsidianNoteRecord[]> {
   const out: ObsidianNoteRecord[] = [];
   await walk(vaultRoot(), out);
   return out;
+}
+
+// Lightweight full-text search across the vault. Splits the query
+// into tokens, scores notes by keyword frequency in title + content,
+// returns top N with a snippet around the first match. Cheap enough
+// for the ~hundreds-to-thousands-of-notes scale we target before
+// needing a real index (BM25 / embeddings — Phase E2).
+export interface SearchHit {
+  path: string;
+  title: string;
+  score: number;
+  snippet: string;
+}
+
+export async function searchNotes(query: string, limit = 10): Promise<SearchHit[]> {
+  const tokens = query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}_]+/u)
+    .filter((t) => t.length >= 2);
+  if (tokens.length === 0) return [];
+  const notes = await listAllNotes();
+  const hits: SearchHit[] = [];
+  for (const note of notes) {
+    const haystack = `${note.title}\n${note.content}`.toLowerCase();
+    let score = 0;
+    let firstMatchIndex = -1;
+    for (const token of tokens) {
+      const occurrences = countOccurrences(haystack, token);
+      if (occurrences === 0) continue;
+      // Title hits weigh extra — same convention as the rest of the
+      // codebase's heuristics.
+      const titleHits = countOccurrences(note.title.toLowerCase(), token);
+      score += occurrences + titleHits * 3;
+      if (firstMatchIndex < 0) {
+        firstMatchIndex = haystack.indexOf(token);
+      }
+    }
+    if (score > 0) {
+      hits.push({
+        path: note.path,
+        title: note.title,
+        score,
+        snippet: makeSnippet(note.content, firstMatchIndex),
+      });
+    }
+  }
+  hits.sort((a, b) => b.score - a.score);
+  return hits.slice(0, limit);
+}
+
+function countOccurrences(haystack: string, needle: string): number {
+  if (!needle) return 0;
+  let count = 0;
+  let idx = 0;
+  while ((idx = haystack.indexOf(needle, idx)) >= 0) {
+    count += 1;
+    idx += needle.length;
+  }
+  return count;
+}
+
+function makeSnippet(content: string, position: number): string {
+  if (position < 0) return content.slice(0, 160);
+  const start = Math.max(0, position - 60);
+  const end = Math.min(content.length, position + 120);
+  let snip = content.slice(start, end).replace(/\s+/g, ' ').trim();
+  if (start > 0) snip = '…' + snip;
+  if (end < content.length) snip = snip + '…';
+  return snip;
 }
 
 async function walk(absDir: string, out: ObsidianNoteRecord[]): Promise<void> {

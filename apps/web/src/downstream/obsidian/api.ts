@@ -94,3 +94,223 @@ export async function deleteNote(notePath: string): Promise<void> {
     throw new Error(`obsidian API: delete failed HTTP ${resp.status}`);
   }
 }
+
+// --- Chat ---
+
+export type ChatRole = 'user' | 'assistant' | 'system';
+
+export interface ChatMessage {
+  id: string;
+  role: ChatRole;
+  content: string;
+  createdAt: string;
+  // Set only on persisted assistant messages — used by the chat UI to
+  // render the "Готово · 25с · 632 токени" footer.
+  elapsedMs?: number;
+  outputTokens?: number;
+  inputTokens?: number;
+}
+
+export interface ChatConversation {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: ChatMessage[];
+}
+
+export interface ChatConversationSummary {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+}
+
+export async function fetchConversations(): Promise<ChatConversationSummary[]> {
+  const resp = await fetch(`${BASE}/chat/conversations`);
+  const data = await jsonOrThrow<{ conversations: ChatConversationSummary[] }>(resp);
+  return data.conversations;
+}
+
+export async function fetchConversation(id: string): Promise<ChatConversation | null> {
+  const resp = await fetch(`${BASE}/chat/conversations/${encodeURIComponent(id)}`);
+  if (resp.status === 404) return null;
+  const data = await jsonOrThrow<{ conversation: ChatConversation }>(resp);
+  return data.conversation;
+}
+
+export async function createConversation(title = ''): Promise<ChatConversation> {
+  const resp = await fetch(`${BASE}/chat/conversations`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  const data = await jsonOrThrow<{ conversation: ChatConversation }>(resp);
+  return data.conversation;
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  const resp = await fetch(`${BASE}/chat/conversations/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  if (!resp.ok && resp.status !== 404) {
+    throw new Error(`obsidian API: delete conversation HTTP ${resp.status}`);
+  }
+}
+
+// One streamed event from the agent reply. Shapes mirror chat.ts on
+// the daemon side.
+export type ChatStreamEvent =
+  | { kind: 'user-message-saved'; message: ChatMessage }
+  | { kind: 'text-delta'; text: string }
+  | { kind: 'tool-use'; toolName: string; toolInput?: unknown }
+  | { kind: 'tool-result'; toolResult?: unknown }
+  | { kind: 'usage'; outputTokens?: number; inputTokens?: number }
+  | { kind: 'done'; detail?: string; elapsedMs?: number; outputTokens?: number; inputTokens?: number }
+  | { kind: 'error'; detail?: string };
+
+// Send a message and stream the agent's reply. Calls onEvent for each
+// SSE frame; resolves when the stream ends. abortSignal stops mid-flight.
+export async function streamMessage(
+  conversationId: string,
+  content: string,
+  onEvent: (event: ChatStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const resp = await fetch(
+    `${BASE}/chat/conversations/${encodeURIComponent(conversationId)}/messages`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content }),
+      signal,
+    },
+  );
+  if (!resp.ok || !resp.body) {
+    throw new Error(`obsidian API: stream HTTP ${resp.status}`);
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // SSE frames are separated by blank lines. Each frame may contain
+    // multiple `data:` lines but we always emit single-line payloads.
+    let idx: number;
+    while ((idx = buffer.indexOf('\n\n')) >= 0) {
+      const frame = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      const payload = parseSseFrame(frame);
+      if (payload !== null) onEvent(payload);
+    }
+  }
+  // Flush any trailing frame.
+  if (buffer.trim().length > 0) {
+    const payload = parseSseFrame(buffer);
+    if (payload !== null) onEvent(payload);
+  }
+}
+
+export interface ChatAttachment {
+  name: string;
+  path: string;
+  size: number;
+  mimeType?: string;
+}
+
+export async function uploadAttachments(files: File[]): Promise<ChatAttachment[]> {
+  if (files.length === 0) return [];
+  const form = new FormData();
+  for (const f of files) form.append('files', f);
+  const resp = await fetch(`${BASE}/chat/upload`, {
+    method: 'POST',
+    body: form,
+  });
+  const data = await jsonOrThrow<{ files: ChatAttachment[] }>(resp);
+  return data.files;
+}
+
+// --- Indexer ---
+
+export type IndexerStatus = 'idle' | 'running' | 'paused' | 'done' | 'error';
+export type IndexerTier = 1 | 2 | 3;
+
+export interface IndexerTierProgress {
+  total: number;
+  completed: number;
+  skipped: number;
+  failed: number;
+}
+
+export interface IndexerProgress {
+  status: IndexerStatus;
+  currentTier: IndexerTier;
+  tier: Record<IndexerTier, IndexerTierProgress>;
+  total: number;
+  completed: number;
+  skipped: number;
+  failed: number;
+  currentFile: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  lastError: string | null;
+}
+
+export type IndexerEvent =
+  | { kind: 'state'; progress: IndexerProgress }
+  | { kind: 'tier-start'; tier: IndexerTier; total: number }
+  | { kind: 'tier-done'; tier: IndexerTier }
+  | { kind: 'file-start'; file: string; tier: IndexerTier }
+  | { kind: 'file-done'; file: string; tier: IndexerTier; notePath?: string }
+  | { kind: 'file-skip'; file: string; tier: IndexerTier; reason: string }
+  | { kind: 'file-error'; file: string; tier: IndexerTier; detail: string }
+  | { kind: 'note-written'; notePath: string; tier: IndexerTier }
+  | { kind: 'finished'; progress: IndexerProgress };
+
+export async function fetchIndexerStatus(): Promise<IndexerProgress> {
+  const resp = await fetch(`${BASE}/indexer/status`);
+  const data = await jsonOrThrow<{ progress: IndexerProgress }>(resp);
+  return data.progress;
+}
+
+export async function controlIndexer(
+  action: 'start' | 'pause' | 'resume' | 'reset',
+): Promise<IndexerProgress> {
+  const resp = await fetch(`${BASE}/indexer/${action}`, { method: 'POST' });
+  const data = await jsonOrThrow<{ progress: IndexerProgress }>(resp);
+  return data.progress;
+}
+
+// Open a long-lived SSE stream for indexer events. Returns a cleanup
+// function that closes the connection. Reconnects are caller's
+// responsibility (or just remount the component).
+export function subscribeIndexer(onEvent: (event: IndexerEvent) => void): () => void {
+  const source = new EventSource(`${BASE}/indexer/events`);
+  source.onmessage = (e) => {
+    try {
+      const parsed = JSON.parse(e.data) as IndexerEvent;
+      onEvent(parsed);
+    } catch {
+      // Ignore malformed frames.
+    }
+  };
+  // Errors auto-reconnect by EventSource; we surface nothing for now.
+  return () => source.close();
+}
+
+function parseSseFrame(frame: string): ChatStreamEvent | null {
+  const lines = frame.split('\n');
+  for (const line of lines) {
+    if (line.startsWith('data: ')) {
+      try {
+        return JSON.parse(line.slice(6)) as ChatStreamEvent;
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}

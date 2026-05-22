@@ -28,7 +28,7 @@ import { useCallback, useRef, useState } from 'react';
 
 import { AppChromeHeader } from '../../components/AppChromeHeader';
 import { navigate } from '../../router';
-import { ObsidianChatStub } from './ObsidianChatStub';
+import { ObsidianChat } from './ObsidianChat';
 import { ObsidianWorkspace } from './ObsidianWorkspace';
 
 const RESIZE_HANDLE_WIDTH = 8;
@@ -133,7 +133,7 @@ export function ObsidianView() {
         }}
       >
         <div className="split-chat-slot">
-          <ObsidianChatStub />
+          <ObsidianChat />
         </div>
         <div
           className="split-resize-handle"

@@ -9,6 +9,113 @@
    apps/web/src/index.css so the view matches ProjectView pixel-for-pixel.
 */
 
+/* ---- Coverage bar ----
+   Sits at the very top of the chat pane. Status-coloured dot + label
+   + counters + Start/Pause/Resume/Reset controls in a thin pill row,
+   with a progress strip underneath. Updates live via the indexer SSE
+   subscription in ObsidianCoverageBar. */
+.obsidian-coverage {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  font-size: 12px;
+  color: var(--text);
+}
+.obsidian-coverage__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+}
+.obsidian-coverage__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex: 0 0 auto;
+}
+.obsidian-coverage__dot--running {
+  background: var(--accent);
+  animation: obsCoveragePulse 1.4s ease-in-out infinite;
+}
+.obsidian-coverage__dot--paused { background: rgb(217, 119, 6); }
+.obsidian-coverage__dot--done   { background: rgb(34, 197, 94); }
+.obsidian-coverage__dot--error  { background: rgb(239, 68, 68); }
+@keyframes obsCoveragePulse {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50%      { opacity: 1;   transform: scale(1.25); }
+}
+.obsidian-coverage__label {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+.obsidian-coverage__count,
+.obsidian-coverage__percent {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-strong, var(--text));
+}
+.obsidian-coverage__current {
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.obsidian-coverage__actions {
+  display: inline-flex;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.obsidian-coverage__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+.obsidian-coverage__btn:hover:not(:disabled) {
+  background: var(--bg-panel);
+  border-color: var(--border-strong, var(--border));
+}
+.obsidian-coverage__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.obsidian-coverage__btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  padding: 3px 6px;
+}
+.obsidian-coverage__btn--ghost:hover:not(:disabled) {
+  background: var(--bg-subtle);
+  border-color: var(--border);
+}
+.obsidian-coverage__track {
+  height: 3px;
+  background: var(--bg-subtle);
+  overflow: hidden;
+}
+.obsidian-coverage__fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 250ms ease;
+}
+.obsidian-coverage__error {
+  padding: 4px 12px 8px;
+  font-size: 11px;
+  color: rgb(239, 68, 68);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---- Chat pane stub ----
    The outer `<section>` uses `.pane` for the layout (flex column, fills
    the split-chat-slot) and `.obsidian-chat` only for any obsidian-only
@@ -42,123 +149,354 @@
   gap: 4px;
 }
 
+/* Hard-coded contrast for the chat header icons — the project's
+   `.icon-only` class is scoped to its parent containers (chat-header-
+   actions, viewer-toolbar-actions etc.) and doesn't apply here, while
+   our previous `var(--text-muted)` rendered the strokes too faint to
+   see on light theme. We pin to the resolved theme tokens directly so
+   the icons are reliably visible everywhere. */
 .obsidian-chat__head-btn {
-  display: inline-flex;
+  display: inline-flex !important;
   align-items: center;
   justify-content: center;
   width: 28px;
   height: 28px;
+  padding: 0;
   border-radius: 6px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text-muted);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-strong, var(--text, #1a1916));
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 }
 .obsidian-chat__head-btn:hover:not(:disabled) {
   background: var(--bg-subtle);
-  color: var(--text);
+  border-color: var(--border-strong, var(--border));
+  color: var(--accent);
 }
 .obsidian-chat__head-btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }
-
-.obsidian-chat__log {
-  flex: 1 1 auto;
-  overflow-y: auto;
-  padding: 20px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+.obsidian-chat__head-btn svg {
+  display: block;
+  stroke: currentColor !important;
+  width: 16px;
+  height: 16px;
 }
 
-.obsidian-chat__empty {
+/* Tool-use rows — faint moho-spaced status entries showing what file
+   the agent is touching. Rendered inline inside `.assistant-flow` so
+   they belong visually to the agent's turn (mirrors ProjectView's
+   FileOpsSummary inline placement). */
+.obsidian-chat__tool-row {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  text-align: center;
-  padding: 32px 8px;
-  gap: 8px;
-}
-.obsidian-chat__empty-title {
-  font-family: var(--serif);
-  font-size: 18px;
-  color: var(--text-strong);
-}
-.obsidian-chat__empty-hint {
-  font-size: 13px;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11.5px;
   color: var(--text-muted);
-  line-height: 1.5;
-  max-width: 280px;
+  font-family: var(--mono);
+  background: var(--bg);
+  border-left: 2px solid var(--border-strong, var(--border));
+  border-radius: 0 4px 4px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.obsidian-chat__suggestions {
+/* Conversation history popover. Absolute-positioned over the chat
+   pane so it visually covers the log instead of pushing it down.
+   Mirrors the project view's `.chat-history-menu` UX: header with
+   title + "+ Нова" button, scrollable list of rows with relative
+   timestamps, trash icon revealed on hover. */
+.obsidian-chat {
+  /* Establish positioning context for the popover children. The pane
+     class already sets display:flex column; relative is additive. */
+  position: relative;
+}
+.obsidian-chat__history-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.18);
+  z-index: 10;
+  cursor: default;
+}
+.obsidian-chat__history-popover {
+  position: absolute;
+  inset-block-start: 50px;
+  inset-inline-end: 12px;
+  inset-inline-start: 12px;
+  z-index: 11;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  width: 100%;
-  margin-top: 16px;
-  max-width: 360px;
-}
-.obsidian-chat__suggestion {
-  text-align: start;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
+  max-height: calc(100% - 70px);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong, var(--border));
   border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+}
+.obsidian-chat__history-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+}
+.obsidian-chat__history-head-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-strong);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.obsidian-chat__history-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
   background: var(--bg-subtle);
   color: var(--text);
-  font-size: 13px;
-  line-height: 1.4;
+  font-size: 11.5px;
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+  transition: background 120ms ease, border-color 120ms ease;
 }
-.obsidian-chat__suggestion:hover {
+.obsidian-chat__history-new:hover {
   background: var(--bg-panel);
-  border-color: var(--border-strong);
+  border-color: var(--border-strong, var(--border));
 }
-.obsidian-chat__suggestion:active {
-  transform: scale(0.99);
+.obsidian-chat__history-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.obsidian-chat__history-empty {
+  padding: 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+.obsidian-chat__history-row {
+  display: flex;
+  align-items: stretch;
+}
+.obsidian-chat__history-row.is-active .obsidian-chat__history-pick {
+  background: var(--accent-subtle, rgba(99, 102, 241, 0.14));
+}
+.obsidian-chat__history-pick {
+  flex: 1 1 auto;
+  text-align: start;
+  background: transparent;
+  border: none;
+  padding: 9px 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-family: inherit;
+  transition: background 100ms ease;
+}
+.obsidian-chat__history-pick:hover {
+  background: var(--bg-subtle);
+}
+.obsidian-chat__history-title {
+  flex: 1 1 auto;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.obsidian-chat__history-meta {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.obsidian-chat__history-delete {
+  flex: 0 0 auto;
+  width: 32px;
+  background: transparent;
+  border: none;
+  color: var(--text-faint, var(--text-muted));
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 100ms ease, background 100ms ease, color 100ms ease;
+}
+.obsidian-chat__history-row:hover .obsidian-chat__history-delete {
+  opacity: 1;
+}
+.obsidian-chat__history-delete:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: rgb(239, 68, 68);
 }
 
+/* Composer shell — matches ChatPane's `.composer-shell` visual: a
+   single bordered card with the action buttons + textarea inside, not
+   a row of individually bordered controls. The outer .obsidian-chat__
+   composer is the surrounding padding/wrapper; .__composer-shell is
+   the bordered card. */
 .obsidian-chat__composer {
   flex: 0 0 auto;
-  padding: 12px;
+  padding: 10px 12px 12px;
   border-top: 1px solid var(--border);
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+  transition: background 120ms ease;
+}
+.obsidian-chat__composer.is-drop-target {
+  background: var(--accent-subtle, rgba(99, 102, 241, 0.12));
+}
+.obsidian-chat__composer-row {
+  display: flex;
+  gap: 6px;
   align-items: flex-end;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 10px);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-xs);
+  padding: 6px 6px 6px 8px;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.obsidian-chat__composer-row:focus-within {
+  border-color: var(--border-strong, var(--border));
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.06));
+}
+/* Paperclip + Send buttons inside the shell read like the outer
+   border doesn't apply twice. Drop their own border and rely on the
+   shell's. */
+.obsidian-chat__composer-row .obsidian-chat__head-btn,
+.obsidian-chat__attach-btn {
+  margin-bottom: 0;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-color: transparent;
+  background: transparent;
+}
+.obsidian-chat__composer-row .obsidian-chat__head-btn:hover:not(:disabled) {
+  background: var(--bg-subtle);
+  border-color: var(--border);
+}
+.obsidian-chat__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.obsidian-chat__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 6px 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  font-size: 12px;
+  color: var(--text);
+  max-width: 220px;
+}
+.obsidian-chat__chip.is-image {
+  background: var(--accent-subtle, rgba(99, 102, 241, 0.14));
+  border-color: var(--accent);
+}
+.obsidian-chat__chip-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+.obsidian-chat__chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 2px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.obsidian-chat__chip-remove:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: rgb(239, 68, 68);
+}
+.obsidian-chat__attach-status {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.obsidian-chat__attach-error {
+  font-size: 11.5px;
+  color: rgb(239, 68, 68);
+}
+.obsidian-chat__drop-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-panel);
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  pointer-events: none;
 }
 .obsidian-chat__textarea {
   flex: 1 1 auto;
-  min-height: 36px;
-  max-height: 140px;
+  min-height: 56px;
+  max-height: 180px;
   resize: none;
-  padding: 9px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg);
+  padding: 8px 6px;
+  border: none;
+  background: transparent;
   color: var(--text);
   font: inherit;
-  line-height: 1.4;
+  line-height: 1.45;
   outline: none;
-  transition: border-color 120ms ease;
+  /* Hide the native scroll buttons / spinner arrows that some
+     browsers render on small textareas — they were what made the
+     composer look "differently from the project". */
+  scrollbar-width: thin;
+}
+.obsidian-chat__textarea::-webkit-scrollbar {
+  width: 6px;
+}
+.obsidian-chat__textarea::-webkit-scrollbar-thumb {
+  background: var(--border-strong, var(--border));
+  border-radius: 3px;
+}
+.obsidian-chat__textarea::-webkit-scrollbar-track {
+  background: transparent;
 }
 .obsidian-chat__textarea:focus {
-  border-color: var(--accent);
+  outline: none;
+  box-shadow: none;
 }
 .obsidian-chat__send {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   border: 1px solid transparent;
   background: var(--accent);
   color: var(--accent-foreground, white);
   cursor: pointer;
-  transition: opacity 120ms ease, transform 120ms ease;
+  transition: opacity 120ms ease, transform 120ms ease, background 120ms ease;
 }
 .obsidian-chat__send:disabled {
   opacity: 0.5;
@@ -526,6 +864,17 @@
 }
 .obsidian-graph__node.is-hover .obsidian-graph__node-circle {
   fill: var(--accent);
+}
+/* Newly-arrived nodes from the live indexer feed pulse for a few
+   seconds so the user spots them appearing in real time. Matches the
+   hover-highlight colour so the visual vocabulary stays consistent. */
+.obsidian-graph__node.is-recent .obsidian-graph__node-circle {
+  fill: var(--accent);
+  animation: obsGraphNodePulse 1.2s ease-in-out infinite;
+}
+@keyframes obsGraphNodePulse {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
 }
 .obsidian-graph__node-label {
   fill: rgba(190, 190, 190, 0.75);

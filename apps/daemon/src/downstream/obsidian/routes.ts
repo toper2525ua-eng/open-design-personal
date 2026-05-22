@@ -15,18 +15,70 @@
 // requiring an explicit "init" step.
 
 import type { Express, Request, Response } from 'express';
+import multer from 'multer';
+import { mkdirSync } from 'node:fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 import {
+  attachmentsRoot,
   deleteNote,
+  ensureAttachmentsRoot,
   listAllNotes,
   listTree,
   readNote,
+  readNotePathForSource,
+  searchNotes,
   writeNote,
   type ObsidianNoteRecord,
 } from './storage.js';
 import { seedVaultIfEmpty } from './seed.js';
+import {
+  appendUserMessage,
+  createConversation,
+  deleteConversation,
+  listConversations,
+  readConversation,
+  streamAssistantReply,
+} from './chat.js';
+import {
+  getProgress as getIndexerProgress,
+  pause as pauseIndexer,
+  reset as resetIndexer,
+  resume as resumeIndexer,
+  start as startIndexer,
+  subscribe as subscribeIndexer,
+  type IndexerEvent,
+} from './indexer.js';
 
 const ROUTE_PREFIX = '/api/downstream/obsidian/global';
+
+// Multer instance scoped to obsidian-chat attachments. Each upload is
+// renamed `<uuid>-<safeName>` so two files with the same name don't
+// collide. 25 MB cap covers screenshots + small docs comfortably; we
+// reject anything bigger so a misclick on a video doesn't fill `.od/`.
+const SAFE_NAME_RE = /[^a-zA-Z0-9._-]+/g;
+function safeFileName(name: string): string {
+  const trimmed = name.normalize('NFKC').replace(SAFE_NAME_RE, '_').slice(-180);
+  return trimmed.length > 0 ? trimmed : 'file';
+}
+
+const attachmentUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      try {
+        mkdirSync(attachmentsRoot(), { recursive: true });
+        cb(null, attachmentsRoot());
+      } catch (err) {
+        cb(err as Error, attachmentsRoot());
+      }
+    },
+    filename: (_req, file, cb) => {
+      cb(null, `${randomUUID()}-${safeFileName(file.originalname)}`);
+    },
+  }),
+  limits: { fileSize: 25 * 1024 * 1024 },
+});
 
 // Re-entrant lazy seed. Called by every handler; the underlying check is
 // a cheap readdir + length comparison so it's safe to call freely.
@@ -82,6 +134,77 @@ export function registerObsidianRoutes(app: Express): void {
       await ensureSeeded();
       const tree = await listTree();
       res.json({ tree });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Full-text search across vault. Backs the obsidian_search MCP tool
+  // and any future in-UI search field. Returns ranked hits with
+  // snippets so callers don't need to read every match.
+  app.get(`${ROUTE_PREFIX}/search`, async (req, res) => {
+    const q = typeof req.query.q === 'string' ? req.query.q : '';
+    const limitRaw = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : 10;
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 50) : 10;
+    if (!q.trim()) {
+      res.status(400).json({ error: 'missing_q' });
+      return;
+    }
+    try {
+      await ensureSeeded();
+      const hits = await searchNotes(q, limit);
+      res.json({ hits });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Reverse lookup: which note (if any) was created for a given
+  // source file. Reads the .source-map.json the indexer maintains.
+  app.get(`${ROUTE_PREFIX}/note-for-source`, async (req, res) => {
+    const file = typeof req.query.file === 'string' ? req.query.file : '';
+    if (!file.trim()) {
+      res.status(400).json({ error: 'missing_file' });
+      return;
+    }
+    try {
+      const notePath = await readNotePathForSource(file);
+      res.json({ notePath });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Backlinks: which notes contain a wikilink that resolves to the
+  // given path. Helps "what links here" navigation.
+  app.get(`${ROUTE_PREFIX}/backlinks`, async (req, res) => {
+    const target = typeof req.query.path === 'string' ? req.query.path : '';
+    if (!target.trim()) {
+      res.status(400).json({ error: 'missing_path' });
+      return;
+    }
+    try {
+      await ensureSeeded();
+      const notes = await listAllNotes();
+      const targetBase = target.split('/').pop()?.toLowerCase() ?? '';
+      const out: { path: string; title: string }[] = [];
+      const re = /\[\[([^\]]+)\]\]/g;
+      for (const note of notes) {
+        if (note.path === target) continue;
+        let match: RegExpExecArray | null;
+        let hit = false;
+        while ((match = re.exec(note.content)) !== null) {
+          const name = (match[1] ?? '').trim();
+          if (!name) continue;
+          if (name === target || name.toLowerCase() === targetBase) {
+            hit = true;
+            break;
+          }
+        }
+        re.lastIndex = 0;
+        if (hit) out.push({ path: note.path, title: note.title });
+      }
+      res.json({ backlinks: out });
     } catch (err) {
       sendError(res, err);
     }
@@ -172,6 +295,178 @@ export function registerObsidianRoutes(app: Express): void {
         return;
       }
       res.status(204).end();
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // --- Chat ---
+
+  app.get(`${ROUTE_PREFIX}/chat/conversations`, async (_req, res) => {
+    try {
+      const conversations = await listConversations();
+      res.json({ conversations });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  app.post(`${ROUTE_PREFIX}/chat/conversations`, async (req, res) => {
+    const body = (req.body ?? {}) as { title?: unknown };
+    const title = typeof body.title === 'string' ? body.title : '';
+    try {
+      const conv = await createConversation(title);
+      res.status(201).json({ conversation: conv });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  app.get(`${ROUTE_PREFIX}/chat/conversations/:id`, async (req, res) => {
+    try {
+      const conv = await readConversation(req.params.id);
+      if (!conv) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      res.json({ conversation: conv });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  app.delete(`${ROUTE_PREFIX}/chat/conversations/:id`, async (req, res) => {
+    try {
+      const removed = await deleteConversation(req.params.id);
+      if (!removed) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      res.status(204).end();
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Upload chat attachments (paste/drop/file-picker from the composer).
+  // Saves to `.od/obsidian-global/.attachments/<uuid>-<name>` and
+  // returns the vault-relative path so the chat layer can paste it
+  // into the next user message. Multer field name is `files` for
+  // symmetry with the project upload endpoint.
+  app.post(
+    `${ROUTE_PREFIX}/chat/upload`,
+    attachmentUpload.array('files', 8),
+    async (req, res) => {
+      try {
+        await ensureAttachmentsRoot();
+        const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+        const root = attachmentsRoot();
+        const out = files.map((f) => ({
+          name: f.originalname,
+          // path relative to the vault root so the agent can Read it
+          // with `.od/obsidian-global/.attachments/...` directly.
+          path: path
+            .join('.attachments', path.relative(root, f.path))
+            .split(path.sep)
+            .join('/'),
+          size: f.size,
+          mimeType: f.mimetype,
+        }));
+        res.json({ files: out });
+      } catch (err) {
+        sendError(res, err);
+      }
+    },
+  );
+
+  // --- Indexer ---
+
+  app.get(`${ROUTE_PREFIX}/indexer/status`, (_req, res) => {
+    res.json({ progress: getIndexerProgress() });
+  });
+
+  app.post(`${ROUTE_PREFIX}/indexer/start`, async (_req, res) => {
+    try {
+      await startIndexer(process.cwd());
+      res.json({ progress: getIndexerProgress() });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  app.post(`${ROUTE_PREFIX}/indexer/pause`, (_req, res) => {
+    pauseIndexer();
+    res.json({ progress: getIndexerProgress() });
+  });
+
+  app.post(`${ROUTE_PREFIX}/indexer/resume`, (_req, res) => {
+    resumeIndexer(process.cwd());
+    res.json({ progress: getIndexerProgress() });
+  });
+
+  app.post(`${ROUTE_PREFIX}/indexer/reset`, (_req, res) => {
+    resetIndexer();
+    res.json({ progress: getIndexerProgress() });
+  });
+
+  // Long-poll SSE stream for live indexer events (state transitions,
+  // per-file start/done/skip/error, note writes). The UI subscribes
+  // here to refresh the coverage bar + live-update the graph view.
+  app.get(`${ROUTE_PREFIX}/indexer/events`, (req, res) => {
+    res.setHeader('content-type', 'text/event-stream');
+    res.setHeader('cache-control', 'no-cache, no-transform');
+    res.setHeader('connection', 'keep-alive');
+    res.flushHeaders?.();
+    // Prime the stream with the current state so a freshly-connected
+    // client immediately renders the right values, even mid-run.
+    const writeEvent = (event: IndexerEvent) => {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+    writeEvent({ kind: 'state', progress: getIndexerProgress() });
+    const unsubscribe = subscribeIndexer(writeEvent);
+    // Heartbeat every 25s — some proxies time out idle SSE
+    // connections, and we want the client to detect the death fast.
+    const heartbeat = setInterval(() => {
+      res.write(': heartbeat\n\n');
+    }, 25_000);
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    });
+  });
+
+  // Send a user message and stream the assistant's reply back as SSE.
+  // Body: { content: string }. Caller must keep the connection open
+  // until the 'done' event arrives.
+  app.post(`${ROUTE_PREFIX}/chat/conversations/:id/messages`, async (req, res) => {
+    const body = (req.body ?? {}) as { content?: unknown };
+    const content = typeof body.content === 'string' ? body.content : '';
+    if (!content.trim()) {
+      res.status(400).json({ error: 'empty_content' });
+      return;
+    }
+    try {
+      const appended = await appendUserMessage(req.params.id, content);
+      if (!appended) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      res.setHeader('content-type', 'text/event-stream');
+      res.setHeader('cache-control', 'no-cache, no-transform');
+      res.setHeader('connection', 'keep-alive');
+      res.flushHeaders?.();
+      const writeEvent = (event: unknown) => {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      };
+      writeEvent({ kind: 'user-message-saved', message: appended.message });
+      let clientClosed = false;
+      req.on('close', () => { clientClosed = true; });
+      const repoRoot = process.cwd();
+      for await (const event of streamAssistantReply(appended.conv, repoRoot)) {
+        if (clientClosed) break;
+        writeEvent(event);
+      }
+      res.end();
     } catch (err) {
       sendError(res, err);
     }

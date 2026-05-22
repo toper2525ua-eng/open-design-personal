@@ -102,13 +102,59 @@ export function ObsidianGraph({ graph, onOpenNote }: Props) {
     return rect.width / rect.height;
   }, []);
 
+  // Track ids that arrived recently (last 4s) so we can pulse them
+  // in. Used by D4 to highlight live indexer writes.
+  const [recentlyAddedIds, setRecentlyAddedIds] = useState<Set<string>>(new Set());
+
   useEffect(() => {
-    // Reset simulation each time the graph data identity changes.
-    nodesRef.current = initNodes(graph.nodes);
+    // Merge: preserve positions of nodes we already had, seed new ids
+    // near the origin so they animate INTO place via simulation. This
+    // keeps the live indexer flow visually calm — only the just-
+    // appeared node moves, the existing layout stays put.
+    const prevById = new Map(nodesRef.current.map((n) => [n.id, n]));
+    const newlyAdded: string[] = [];
+    nodesRef.current = graph.nodes.map((node) => {
+      const prev = prevById.get(node.id);
+      if (prev) {
+        return { ...prev, label: node.label, degree: node.degree };
+      }
+      newlyAdded.push(node.id);
+      const angle = Math.random() * Math.PI * 2;
+      const r = 30 + Math.random() * 30;
+      return {
+        id: node.id,
+        label: node.label,
+        degree: node.degree,
+        x: Math.cos(angle) * r,
+        y: Math.sin(angle) * r,
+        vx: 0,
+        vy: 0,
+        fixed: false,
+      };
+    });
     edgesRef.current = graph.edges;
+    if (newlyAdded.length > 0) {
+      setRecentlyAddedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of newlyAdded) next.add(id);
+        return next;
+      });
+      const ids = newlyAdded.slice();
+      window.setTimeout(() => {
+        setRecentlyAddedIds((prev) => {
+          const next = new Set(prev);
+          for (const id of ids) next.delete(id);
+          return next;
+        });
+      }, 4000);
+    }
     stepRef.current = 0;
-    viewLockedRef.current = false;
-    setView(fitView(nodesRef.current, currentSvgAspect()));
+    // Only auto-fit if the user hasn't interacted with the view yet AND
+    // this is the first time we get any nodes (initial layout). On
+    // subsequent live refreshes we keep the user's current view stable.
+    if (!viewLockedRef.current && prevById.size === 0) {
+      setView(fitView(nodesRef.current, currentSvgAspect()));
+    }
     let lastFrame = 0;
     const loop = (ts: number) => {
       // Throttle to ~30fps so we don't burn CPU on a settled layout.
@@ -369,6 +415,7 @@ export function ObsidianGraph({ graph, onOpenNote }: Props) {
             {nodes.map((node) => {
               const r = BASE_RADIUS + node.degree * RADIUS_PER_DEGREE;
               const isHover = node.id === hoverId;
+              const isRecent = recentlyAddedIds.has(node.id);
               return (
                 <g
                   key={node.id}
@@ -376,6 +423,7 @@ export function ObsidianGraph({ graph, onOpenNote }: Props) {
                   className={[
                     'obsidian-graph__node',
                     isHover ? 'is-hover' : '',
+                    isRecent ? 'is-recent' : '',
                   ].filter(Boolean).join(' ')}
                   onPointerDown={(e) => onNodePointerDown(e, node.id)}
                   onPointerEnter={() => setHoverId(node.id)}

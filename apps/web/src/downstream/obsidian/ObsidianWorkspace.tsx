@@ -27,6 +27,7 @@ import {
   fetchNote,
   fetchTree,
   saveNote,
+  subscribeIndexer,
   type ObsidianGraphPayload,
   type ObsidianNote,
   type ObsidianTreeNode,
@@ -85,6 +86,27 @@ export function ObsidianWorkspace() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // Live-refresh tree + graph whenever the background indexer writes a
+  // new note. Throttled internally via the EventSource (one event per
+  // file completion is fine) — heavy fetches are coalesced by the
+  // browser. We don't tear down + reconnect on every tab switch
+  // because the parent ObsidianView keeps this component mounted.
+  useEffect(() => {
+    const off = subscribeIndexer((event) => {
+      if (event.kind !== 'note-written' && event.kind !== 'finished') return;
+      void (async () => {
+        try {
+          const [t, g] = await Promise.all([fetchTree(), fetchGraph()]);
+          setTree(t);
+          setGraph(g);
+        } catch {
+          // Best-effort live refresh — ignore transient errors.
+        }
+      })();
+    });
+    return off;
   }, []);
 
   // Resolve all paths that need loading — currently the active note for
