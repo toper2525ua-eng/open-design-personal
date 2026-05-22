@@ -42,13 +42,16 @@ import {
   streamAssistantReply,
 } from './chat.js';
 import {
+  getIndexerConfig,
   getProgress as getIndexerProgress,
   pause as pauseIndexer,
   reset as resetIndexer,
   resume as resumeIndexer,
+  setIndexerModel,
   start as startIndexer,
   subscribe as subscribeIndexer,
   type IndexerEvent,
+  type IndexerModel,
 } from './indexer.js';
 
 const ROUTE_PREFIX = '/api/downstream/obsidian/global';
@@ -407,6 +410,27 @@ export function registerObsidianRoutes(app: Express): void {
   app.post(`${ROUTE_PREFIX}/indexer/reset`, (_req, res) => {
     resetIndexer();
     res.json({ progress: getIndexerProgress() });
+  });
+
+  // Read the persisted indexer config (currently just the model
+  // choice). UI reads this on mount to populate the dropdown.
+  app.get(`${ROUTE_PREFIX}/indexer/config`, async (_req, res) => {
+    const cfg = await getIndexerConfig();
+    res.json({ config: cfg });
+  });
+
+  // Update the model used for every subsequent per-file spawn. Active
+  // spawns finish on the previous model; switch only applies to the
+  // NEXT spawn so we don't kill in-flight work.
+  app.put(`${ROUTE_PREFIX}/indexer/config`, async (req, res) => {
+    const body = (req.body ?? {}) as { model?: unknown };
+    const requested = body.model === 'opus' || body.model === 'sonnet' ? body.model as IndexerModel : null;
+    if (!requested) {
+      res.status(400).json({ error: 'invalid_model', allowed: ['sonnet', 'opus'] });
+      return;
+    }
+    const cfg = await setIndexerModel(requested);
+    res.json({ config: cfg });
   });
 
   // Long-poll SSE stream for live indexer events (state transitions,

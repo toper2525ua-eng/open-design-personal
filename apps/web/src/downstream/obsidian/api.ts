@@ -284,6 +284,29 @@ export async function controlIndexer(
   return data.progress;
 }
 
+// Per-spawn model selection. Defaults to 'sonnet' (cheaper than opus
+// by ~5× for the classify+short-note workload). User flips via the
+// coverage-bar dropdown; the choice persists across daemon restarts in
+// .indexer-config.json.
+export type IndexerModel = 'sonnet' | 'opus';
+export interface IndexerConfig { model: IndexerModel }
+
+export async function fetchIndexerConfig(): Promise<IndexerConfig> {
+  const resp = await fetch(`${BASE}/indexer/config`);
+  const data = await jsonOrThrow<{ config: IndexerConfig }>(resp);
+  return data.config;
+}
+
+export async function updateIndexerModel(model: IndexerModel): Promise<IndexerConfig> {
+  const resp = await fetch(`${BASE}/indexer/config`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model }),
+  });
+  const data = await jsonOrThrow<{ config: IndexerConfig }>(resp);
+  return data.config;
+}
+
 // Open a long-lived SSE stream for indexer events. Returns a cleanup
 // function that closes the connection. Reconnects are caller's
 // responsibility (or just remount the component).

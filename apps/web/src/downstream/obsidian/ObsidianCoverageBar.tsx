@@ -11,9 +11,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { Icon } from '../../components/Icon';
 import {
   controlIndexer,
+  fetchIndexerConfig,
   fetchIndexerStatus,
   subscribeIndexer,
+  updateIndexerModel,
   type IndexerEvent,
+  type IndexerModel,
   type IndexerProgress,
   type IndexerStatus,
   type IndexerTier,
@@ -71,6 +74,8 @@ export function ObsidianCoverageBar() {
   const [progress, setProgress] = useState<IndexerProgress>(EMPTY);
   const [working, setWorking] = useState<'start' | 'pause' | 'resume' | 'reset' | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [model, setModel] = useState<IndexerModel>('sonnet');
+  const [modelSwitching, setModelSwitching] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -81,6 +86,12 @@ export function ObsidianCoverageBar() {
       } catch {
         // Ignore; SSE will populate.
       }
+      try {
+        const cfg = await fetchIndexerConfig();
+        if (!cancelled) setModel(cfg.model);
+      } catch {
+        // Falls back to default 'sonnet'.
+      }
     })();
     const off = subscribeIndexer((event: IndexerEvent) => {
       if (event.kind === 'state' || event.kind === 'finished') {
@@ -89,6 +100,20 @@ export function ObsidianCoverageBar() {
     });
     return () => { cancelled = true; off(); };
   }, []);
+
+  const handleModelChange = useCallback(async (next: IndexerModel) => {
+    if (next === model) return;
+    setModelSwitching(true);
+    setModel(next); // optimistic
+    try {
+      const cfg = await updateIndexerModel(next);
+      setModel(cfg.model);
+    } catch (err) {
+      setActionError(`Не вдалося змінити модель: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setModelSwitching(false);
+    }
+  }, [model]);
 
   // Auto-dismiss an action error after a few seconds so a transient
   // failure (e.g. a stale daemon process serving 404 until restart)
@@ -157,6 +182,16 @@ export function ObsidianCoverageBar() {
           ) : null}
         </span>
         <div className="obsidian-coverage__actions">
+          <select
+            className="obsidian-coverage__model"
+            value={model}
+            onChange={(e) => void handleModelChange(e.target.value as IndexerModel)}
+            disabled={modelSwitching}
+            title="Модель для індексера. Sonnet ~5× дешевший за Opus, якості вистачає"
+          >
+            <option value="sonnet">Sonnet</option>
+            <option value="opus">Opus</option>
+          </select>
           {progress.status === 'idle' || progress.status === 'done' ? (
             <button
               type="button"

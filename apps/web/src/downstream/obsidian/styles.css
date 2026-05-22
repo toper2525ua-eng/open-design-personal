@@ -97,6 +97,31 @@
   background: var(--bg-subtle);
   border-color: var(--border);
 }
+.obsidian-coverage__model {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 3px 22px 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text);
+  font-size: 11.5px;
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-subtle, var(--text)) 50%),
+                    linear-gradient(135deg, var(--text-subtle, var(--text)) 50%, transparent 50%);
+  background-position: calc(100% - 12px) 50%, calc(100% - 8px) 50%;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+  transition: background-color 100ms ease, border-color 100ms ease;
+}
+.obsidian-coverage__model:hover:not(:disabled) {
+  background-color: var(--bg-panel);
+  border-color: var(--border-strong, var(--border));
+}
+.obsidian-coverage__model:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .obsidian-coverage__track {
   height: 3px;
   background: var(--bg-subtle);

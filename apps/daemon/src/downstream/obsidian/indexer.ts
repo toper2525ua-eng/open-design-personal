@@ -176,6 +176,52 @@ function recomputeAggregates(): void {
   state.failed = failed;
 }
 
+// --- Persistent indexer config (model choice) ---
+
+const CONFIG_FILENAME = '.indexer-config.json';
+export type IndexerModel = 'sonnet' | 'opus';
+interface IndexerConfig {
+  model: IndexerModel;
+}
+let indexerConfigCache: IndexerConfig | null = null;
+
+async function loadIndexerConfig(): Promise<IndexerConfig> {
+  if (indexerConfigCache) return indexerConfigCache;
+  try {
+    const raw = await readFile(path.join(vaultRoot(), CONFIG_FILENAME), 'utf-8');
+    const parsed = JSON.parse(raw) as Partial<IndexerConfig>;
+    const model: IndexerModel = parsed.model === 'opus' ? 'opus' : 'sonnet';
+    indexerConfigCache = { model };
+  } catch {
+    // Default to Sonnet — cheaper than Opus and quality is fine for
+    // classify+short-note workloads. User can flip via the UI.
+    indexerConfigCache = { model: 'sonnet' };
+  }
+  return indexerConfigCache;
+}
+
+async function saveIndexerConfig(): Promise<void> {
+  if (!indexerConfigCache) return;
+  try {
+    await mkdir(vaultRoot(), { recursive: true });
+    await atomicWriteFile(path.join(vaultRoot(), CONFIG_FILENAME), JSON.stringify(indexerConfigCache, null, 2));
+  } catch {
+    /* non-fatal — config falls back to default on next load */
+  }
+}
+
+export async function getIndexerConfig(): Promise<IndexerConfig> {
+  return { ...(await loadIndexerConfig()) };
+}
+
+export async function setIndexerModel(model: IndexerModel): Promise<IndexerConfig> {
+  const cfg = await loadIndexerConfig();
+  cfg.model = model;
+  indexerConfigCache = cfg;
+  await saveIndexerConfig();
+  return { ...cfg };
+}
+
 // --- Persistent skip-state ---
 
 const STATE_FILENAME = '.index-state.json';
@@ -605,6 +651,11 @@ async function indexOneFile(absFile: string, repoRoot: string, tier: Tier): Prom
   const relPath = path.relative(repoRoot, absFile).split(path.sep).join('/');
   const prompt = buildPromptForTier(relPath, content, tier);
 
+  // Choose model per the user's coverage-bar dropdown. Sonnet is the
+  // default (~5× cheaper than Opus for this classify+short-note task,
+  // quality is fine); the user can flip to Opus when they want max
+  // judgment on a hard codebase.
+  const cfg = await loadIndexerConfig();
   return new Promise<IndexOutcome>((resolve) => {
     let proc: ChildProcess;
     try {
@@ -613,6 +664,7 @@ async function indexOneFile(absFile: string, repoRoot: string, tier: Tier): Prom
         '--input-format', 'text',
         '--output-format', 'text',
         '--permission-mode', 'bypassPermissions',
+        '--model', cfg.model,
       ], {
         cwd: repoRoot,
         shell: process.platform === 'win32',
