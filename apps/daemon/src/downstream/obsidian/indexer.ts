@@ -525,10 +525,36 @@ function collectTier2Files(repoRoot: string, alreadyCovered: Set<string>): strin
   return out;
 }
 
-// Tier 3: everything else.
+// Patterns that are virtually never worth a tier-3 note. Skipping them
+// at the QUEUE level (not via claude-spawn-then-skip) is pure savings:
+// every spawn would cost 5-9k tokens just for claude to read the file
+// and tell us what we already know — that minified/bundled/generated
+// output isn't worth documenting. Most of the user's 2400+ packaged-
+// app tier-3 queue was webpack chunks; this prunes them.
+const TIER3_SKIP_PATH_PATTERNS = [
+  // Webpack-style hashed chunks: `chunks/chunk-AB12CD34.mjs` etc.
+  /[\\/]chunks[\\/]chunk-[A-Z0-9]+\.(m?js|cjs)$/i,
+  // Feature chunks with content-hash suffix: `browser-open-42BVXORX.mjs`.
+  /[\\/]chunks[\\/][^\\/]+-[A-Z0-9]{8}\.(m?js|cjs)$/,
+  // Type-declaration files — schema, not behavior.
+  /\.d\.ts$/i,
+  // Source maps — generated, never narrative.
+  /\.(m?js|css)\.map$/i,
+  // Minified / pre-bundled outputs.
+  /\.min\.(m?js|css)$/i,
+  // Vite/Rollup-style hashed assets in production output.
+  /[\\/]assets[\\/][^\\/]+-[a-zA-Z0-9_-]{8,12}\.(m?js|css)$/,
+];
+
+function isTier3Skippable(abs: string): boolean {
+  const posix = abs.replace(/\\/g, '/');
+  return TIER3_SKIP_PATH_PATTERNS.some((rx) => rx.test(posix));
+}
+
+// Tier 3: everything else, minus the obvious-junk patterns above.
 function collectTier3Files(repoRoot: string, alreadyCovered: Set<string>): string[] {
   const all = walkAllIndexableFiles(repoRoot);
-  return all.filter((abs) => !alreadyCovered.has(abs));
+  return all.filter((abs) => !alreadyCovered.has(abs) && !isTier3Skippable(abs));
 }
 
 function collectTierFiles(repoRoot: string, tier: Tier, alreadyCovered: Set<string>): string[] {
