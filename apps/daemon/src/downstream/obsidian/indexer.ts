@@ -29,7 +29,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 
-import { atomicWriteFile, ensureVaultRoot, updateSourceMapFromNote, vaultRoot } from './storage.js';
+import { atomicWriteFile, ensureVaultRoot, listAllNotes, updateSourceMapFromNote, vaultRoot } from './storage.js';
 import { seedVaultIfEmpty } from './seed.js';
 import { flushTocRebuild, scheduleTocRebuild } from './toc.js';
 
@@ -295,6 +295,41 @@ async function saveIndexState(): Promise<void> {
 
 // --- Public API ---
 
+// Walk every note, harvest `<!-- sourceFile: X -->` markers, and
+// pre-populate the mtime cache so files that already have notes get
+// instant-skipped on next runLoop. Idempotent — running this on every
+// start() is cheap (~10ms / note) and means any prior daemon run
+// (including pre-cache-feature versions) gets its work picked up.
+//
+// Why this matters in practice: every auto-update bumps the mtime of
+// every bundled file, invalidating the fast-path. Even with the
+// hash-fallback this still has to read+hash each file. Harvesting at
+// startup is the cheapest possible recovery — we read the notes we
+// already wrote, learn which source files they describe, and trust
+// that history.
+async function harvestExistingNotes(repoRoot: string): Promise<void> {
+  const state = await loadIndexState();
+  let notes: Awaited<ReturnType<typeof listAllNotes>>;
+  try { notes = await listAllNotes(); }
+  catch { return; }
+  for (const note of notes) {
+    if (note.path === 'README' || note.path.startsWith('.')) continue;
+    try { await updateSourceMapFromNote(note.path, note.content); }
+    catch { /* per-note errors don't kill startup */ }
+    const re = /<!--\s*sourceFile:\s*([^\s]+)\s*-->/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(note.content)) !== null) {
+      const rel = m[1]!.trim();
+      const absFile = path.join(repoRoot, rel);
+      try {
+        const st = await stat(absFile);
+        if (st.mtimeMs > 0) state.fileMtimes[rel] = st.mtimeMs;
+      } catch { /* source file gone — leave cache as is */ }
+    }
+  }
+  await saveIndexState();
+}
+
 export async function start(repoRoot: string): Promise<void> {
   if (lifecycleBusy) return;
   lifecycleBusy = true;
@@ -303,6 +338,10 @@ export async function start(repoRoot: string): Promise<void> {
     await ensureVaultRoot();
     await seedVaultIfEmpty();
     await loadIndexState();
+    // Cheap recovery — read existing notes, learn what they cover,
+    // backfill cache. Runs before queue collection so the smart-skip
+    // sees the freshly-populated mtimes on the very first iteration.
+    await harvestExistingNotes(repoRoot);
 
     // Pre-compute counts per tier so the coverage bar shows full totals
     // before any spawns run. We re-collect tier 1's queue first (the
