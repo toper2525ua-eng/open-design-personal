@@ -564,16 +564,19 @@ const TIER3_SKIP_PATH_PATTERNS = [
   /[\\/]__mocks__[\\/]/,
   // Locale dictionaries — translated copy strings, not narrative.
   /[\\/]locales[\\/][a-z]{2}([-_][A-Z]{2})?\.json$/,
-  // The Open Design "catalog" subtrees that ship with the packaged
-  // app — design systems, templates, plugins, skills, prompts,
-  // community content. These are PRODUCT CONTENT, not program code:
-  // each subdir is self-describing through its own manifest, and the
-  // user already has top-level overview notes covering them as
-  // groups. Per-leaf-file claude spawns just rediscover what the
-  // overview already says. Saves ~2300 spawns on a packaged-app
-  // queue. Keep `craft/` and `frames/` (small, structural — actually
-  // worth per-file documentation).
-  /[\\/]open-design[\\/](design-systems|design-templates|plugins|prompt-templates|skills|community-pets)[\\/]/,
+  // The Open Design "catalog" subtrees ship one item per subdirectory.
+  // We KEEP the manifest/README/main files at the top of each item's
+  // dir (so the knowledge base has one note per item) and SKIP the
+  // implementation guts nested inside (scripts/, lib/, components/,
+  // etc.) — those are summarized by the manifest already.
+  //
+  // Most categories are flat: `<category>/<item>/<files>`.
+  /[\\/]open-design[\\/](design-systems|design-templates|prompt-templates|skills|community-pets)[\\/][^\\/]+[\\/][^\\/]+[\\/]/,
+  // Plugins are 2-deep groups: `plugins/<group>/<subgroup>/<item>/<files>`.
+  // E.g. `plugins/_official/atoms/build-test/SKILL.md` is an item top-level
+  // file that we want kept; `plugins/_official/atoms/build-test/scripts/foo.ts`
+  // is implementation we want skipped.
+  /[\\/]open-design[\\/]plugins[\\/][^\\/]+[\\/][^\\/]+[\\/][^\\/]+[\\/][^\\/]+[\\/]/,
 ];
 
 function isTier3Skippable(abs: string): boolean {
@@ -1021,23 +1024,24 @@ function buildTier3Prompt(relPath: string, content: string): string {
     '',
     '## Алгоритм',
     '',
-    'Це **тіер 3 — окремі файли**. Тіери 1-2 вже покрили overview і модулі. На цьому тіері пиши нотатку ТІЛЬКИ якщо файл містить значущу самостійну логіку (важлива функція/клас/патерн/буг-фікс/архітектурне рішення). **Більшість файлів треба Skip.**',
+    'Це **тіер 3 — окремі файли**. Файли потрапляють сюди ВЖЕ після агресивного path-фільтра (вебпак-чанки, рендери, vendor, deep-nested catalog-implementation відсіюються на рівні черги). Тому ВСЕ що тут — варте короткої нотатки, навіть якщо це manifest чи невеличкий конфіг.',
+    '',
+    '**Дефолт — пиши нотатку.** Skip лише якщо файл реально порожній/безглуздий.',
     '',
     '**Крок 1.** Розвідай:',
     '- `Glob ".od/obsidian-global/**/*.md"` + `Grep` по basename — побачити нотатки + знайти tier-2 нотатку про модуль до якого цей файл належить.',
     '',
-    '**Крок 2.** Вирішуй (будь СУВОРИМ — більшість Skip):',
-    '- ✅ Якщо є нотатка ПРО ЦЕЙ файл — `Edit` тільки нові факти.',
-    '- ✅ Якщо файл має значущу логіку і ще не задокументований — `Write` у наявну категорію.',
-    '- ✅ **BACKTRACK ДОЗВОЛЕНО**: якщо тіер-2 module-нотатка не згадує цей файл або не має wikilink — `Edit` її, додай посилання. Це нормально.',
-    '- ❌ Дрібний компонент UI / type-only файл / тривіальний хелпер / тест-fixture / локалізація — `Skipped`.',
-    '- ❌ Файл просто re-exports або проста утиліта — `Skipped`.',
+    '**Крок 2.** Вирішуй:',
+    '- ✅ Якщо є нотатка ПРО ЦЕЙ файл — `Edit`: додай нові факти / wikilinks.',
+    '- ✅ Якщо нема — `Write` у наявну категорію. Навіть коротка нотатка (3-5 пунктів) це краще ніж нічого.',
+    '- ✅ **BACKTRACK ДОЗВОЛЕНО**: якщо тіер-2 module-нотатка не згадує цей файл — `Edit` її, додай посилання.',
+    '- ❌ Skip ТІЛЬКИ якщо: файл повністю порожній (0 рядків логіки), або вже описаний в іншій нотатці настільки повно що додати нічого, або це згенерований bundled-вивід (хоча path-фільтр такі мав би відсіяти).',
     '',
-    '**Крок 3.** Максимум 2-3 додаткових Read/Grep. Не дослідуй надто.',
+    '**Крок 3.** Максимум 2-3 додаткових Read/Grep. Не дослідуй надто — короткі нотатки кращі за відсутні.',
     '',
-    '## Формат file-нотатки (ТІЕР 3, рідко пишемо)',
+    '## Формат file-нотатки (ТІЕР 3)',
     '- Українська. `# <Назва файла або концепту>`.',
-    '- 3-7 пунктів. Стисло — що файл робить, що цікавого.',
+    '- 3-7 пунктів. Стисло — що файл робить, які важливі деталі. Для манифестів: що визначає (id, назва, призначення). Для коду: ключова логіка одним абзацом.',
     '- В кінці: `<!-- sourceFile: <relPath> -->` + `<!-- tier: 3 -->`.',
     '',
     '## Відповідь',
