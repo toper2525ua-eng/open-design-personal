@@ -26,6 +26,7 @@
 import { mkdir, readFile, stat } from 'node:fs/promises';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import { atomicWriteFile, ensureVaultRoot, updateSourceMapFromNote, vaultRoot } from './storage.js';
@@ -227,7 +228,16 @@ export async function setIndexerModel(model: IndexerModel): Promise<IndexerConfi
 const STATE_FILENAME = '.index-state.json';
 interface IndexState {
   lastFinishedAt: string | null;
+  // Mtime fast-path: file unchanged across runs → instant skip without
+  // reading the file. Invalidated by auto-updater (every bundled file
+  // gets a fresh mtime on install) so we keep a hash fallback.
   fileMtimes: Record<string, number>;
+  // Content hash fallback: short SHA-1 prefix per file (16 hex chars).
+  // Used when mtime mismatches: if the hash still matches, treat the
+  // file as unchanged (e.g. copied-with-new-timestamp by auto-updater)
+  // and SKIP without spawning claude. Same total work as a read+hash
+  // (~10ms / file) vs ~5-9k tokens for a claude spawn.
+  fileHashes: Record<string, string>;
 }
 let indexStateCache: IndexState | null = null;
 
@@ -242,11 +252,25 @@ async function loadIndexState(): Promise<IndexState> {
       fileMtimes: (parsed.fileMtimes && typeof parsed.fileMtimes === 'object')
         ? parsed.fileMtimes as Record<string, number>
         : {},
+      fileHashes: (parsed.fileHashes && typeof parsed.fileHashes === 'object')
+        ? parsed.fileHashes as Record<string, string>
+        : {},
     };
   } catch {
-    indexStateCache = { lastFinishedAt: null, fileMtimes: {} };
+    indexStateCache = { lastFinishedAt: null, fileMtimes: {}, fileHashes: {} };
   }
   return indexStateCache;
+}
+
+// Short content fingerprint — SHA-1, first 16 hex chars. Plenty of
+// entropy for ~10^4 files and stays small in the JSON state file.
+async function computeFileHash(absFile: string): Promise<string | null> {
+  try {
+    const buf = await readFile(absFile);
+    return createHash('sha1').update(buf).digest('hex').slice(0, 16);
+  } catch {
+    return null;
+  }
 }
 
 // Chain writes so two concurrent saveIndexState() calls don't collide
@@ -347,7 +371,7 @@ export function reset(): void {
   state.finishedAt = null;
   state.lastError = null;
   recomputeAggregates();
-  indexStateCache = { lastFinishedAt: null, fileMtimes: {} };
+  indexStateCache = { lastFinishedAt: null, fileMtimes: {}, fileHashes: {} };
   void saveIndexState();
   emitState();
 }
@@ -535,15 +559,38 @@ async function runLoop(repoRoot: string, token: number): Promise<void> {
     emitState();
 
     // Smart skip on unchanged file.
+    //
+    //   Fast path: mtime matches the cached value → skip with zero I/O.
+    //   Fallback: mtime mismatches but content hash matches the cached
+    //     hash → skip + refresh mtime so subsequent runs hit the fast
+    //     path again. This branch is the auto-updater immunity: every
+    //     bundled file gets a new mtime on install but content is the
+    //     same, so the hash check rescues all of them without burning
+    //     claude spawns.
     let mtimeMs = 0;
     try { mtimeMs = (await stat(file)).mtimeMs; } catch { mtimeMs = 0; }
     if (mtimeMs > 0 && indexState.fileMtimes[relPath] === mtimeMs) {
       state.tier[tier].skipped++;
       recomputeAggregates();
-      emit({ kind: 'file-skip', file: relPath, tier, reason: 'unchanged since last index' });
+      emit({ kind: 'file-skip', file: relPath, tier, reason: 'unchanged since last index (mtime)' });
       state.currentFile = null;
       emitState();
       continue;
+    }
+    const cachedHash = indexState.fileHashes[relPath];
+    if (cachedHash) {
+      const currentHash = await computeFileHash(file);
+      if (currentHash && currentHash === cachedHash) {
+        // Content unchanged but mtime drifted (e.g. auto-update). Skip
+        // and refresh mtime so the fast path hits next time.
+        if (mtimeMs > 0) indexState.fileMtimes[relPath] = mtimeMs;
+        state.tier[tier].skipped++;
+        recomputeAggregates();
+        emit({ kind: 'file-skip', file: relPath, tier, reason: 'unchanged since last index (hash)' });
+        state.currentFile = null;
+        emitState();
+        continue;
+      }
     }
 
     emit({ kind: 'file-start', file: relPath, tier });
@@ -551,9 +598,18 @@ async function runLoop(repoRoot: string, token: number): Promise<void> {
     try {
       const outcome = await indexOneFile(file, repoRoot, tier);
       if (token !== runToken) return;
+      // Helper to record mtime + content hash on a successful outcome.
+      // Called for both 'skipped' (agent decided this file isn't worth
+      // a note) and 'written' (agent wrote/edited a note). Failed
+      // outcomes don't touch the cache so they retry on next run.
+      const recordSuccess = async () => {
+        if (mtimeMs > 0) indexState.fileMtimes[relPath] = mtimeMs;
+        const h = await computeFileHash(file);
+        if (h) indexState.fileHashes[relPath] = h;
+      };
       if (outcome.kind === 'skipped') {
         state.tier[tier].skipped++;
-        if (mtimeMs > 0) indexState.fileMtimes[relPath] = mtimeMs;
+        await recordSuccess();
         emit({ kind: 'file-skip', file: relPath, tier, reason: outcome.reason });
       } else if (outcome.kind === 'error') {
         state.tier[tier].failed++;
@@ -561,7 +617,7 @@ async function runLoop(repoRoot: string, token: number): Promise<void> {
         emit({ kind: 'file-error', file: relPath, tier, detail: outcome.detail });
       } else {
         state.tier[tier].completed++;
-        if (mtimeMs > 0) indexState.fileMtimes[relPath] = mtimeMs;
+        await recordSuccess();
         emit({
           kind: 'file-done',
           file: relPath,
