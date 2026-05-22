@@ -544,6 +544,26 @@ const TIER3_SKIP_PATH_PATTERNS = [
   /\.min\.(m?js|css)$/i,
   // Vite/Rollup-style hashed assets in production output.
   /[\\/]assets[\\/][^\\/]+-[a-zA-Z0-9_-]{8,12}\.(m?js|css)$/,
+  // Vendored code copied into the tree — third-party, not the
+  // user's program. Hits dirs like `<template>/scripts/lib/vendor/`.
+  /[\\/]vendor[\\/]/,
+  // JSON / TS schemas — these are shape declarations, not behavior.
+  /\.schema\.(ts|tsx|js|mjs|cjs|json)$/i,
+  // Rendered design-system component catalogs and design-template
+  // example renders — output, not source. `components.html` lives
+  // under each design-system; templates ship example HTML beside
+  // their script files.
+  /[\\/]design-systems[\\/][^\\/]+[\\/]components\.html$/i,
+  /[\\/]design-templates[\\/].+\.html$/i,
+  // Storybook artifacts and rendered preview pages, if any.
+  /[\\/]storybook-static[\\/]/,
+  // Common test scaffolding — fixtures and snapshots. Tier 2 already
+  // skips these in some collectors, but tier 3 walked them.
+  /[\\/]__fixtures__[\\/]/,
+  /[\\/]__snapshots__[\\/]/,
+  /[\\/]__mocks__[\\/]/,
+  // Locale dictionaries — translated copy strings, not narrative.
+  /[\\/]locales[\\/][a-z]{2}([-_][A-Z]{2})?\.json$/,
 ];
 
 function isTier3Skippable(abs: string): boolean {
