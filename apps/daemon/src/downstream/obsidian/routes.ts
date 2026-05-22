@@ -417,22 +417,36 @@ export function registerObsidianRoutes(app: Express): void {
     res.setHeader('cache-control', 'no-cache, no-transform');
     res.setHeader('connection', 'keep-alive');
     res.flushHeaders?.();
+    let alive = true;
+    const cleanup = () => {
+      if (!alive) return;
+      alive = false;
+      clearInterval(heartbeat);
+      try { unsubscribe(); } catch { /* idempotent */ }
+    };
     // Prime the stream with the current state so a freshly-connected
-    // client immediately renders the right values, even mid-run.
+    // client immediately renders the right values, even mid-run. If
+    // the write throws (client already closed), trip cleanup so the
+    // listener doesn't leak into the global Set, broadcasting to a
+    // dead socket forever.
     const writeEvent = (event: IndexerEvent) => {
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
+      if (!alive) return;
+      try {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      } catch {
+        cleanup();
+      }
     };
     writeEvent({ kind: 'state', progress: getIndexerProgress() });
     const unsubscribe = subscribeIndexer(writeEvent);
     // Heartbeat every 25s — some proxies time out idle SSE
     // connections, and we want the client to detect the death fast.
     const heartbeat = setInterval(() => {
-      res.write(': heartbeat\n\n');
+      if (!alive) return;
+      try { res.write(': heartbeat\n\n'); } catch { cleanup(); }
     }, 25_000);
-    req.on('close', () => {
-      clearInterval(heartbeat);
-      unsubscribe();
-    });
+    req.on('close', cleanup);
+    res.on('error', cleanup);
   });
 
   // Send a user message and stream the assistant's reply back as SSE.

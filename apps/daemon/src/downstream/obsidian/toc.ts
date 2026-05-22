@@ -35,6 +35,22 @@ export function scheduleTocRebuild(): void {
   }, 500);
 }
 
+// Force-flush any pending debounced rebuild and wait for it. Called at
+// tier boundaries / indexer-finish so the master TOC is durable on disk
+// before we move on, instead of sitting in the 500ms debounce window
+// where a daemon crash would leave the TOC stale.
+export async function flushTocRebuild(): Promise<void> {
+  if (coalesceTimer) {
+    clearTimeout(coalesceTimer);
+    coalesceTimer = null;
+  }
+  if (pendingRebuild) {
+    await pendingRebuild;
+  }
+  pendingRebuild = rebuildToc().finally(() => { pendingRebuild = null; });
+  await pendingRebuild;
+}
+
 export async function rebuildToc(): Promise<void> {
   const notes = await listAllNotes();
   // Skip the TOC itself so we never recurse into our own list.

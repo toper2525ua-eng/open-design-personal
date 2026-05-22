@@ -23,14 +23,21 @@
 // to .od/obsidian-global/.index-state.json so re-runs skip files that
 // haven't changed since the previous successful pass.
 
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat } from 'node:fs/promises';
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 
-import { ensureVaultRoot, updateSourceMapFromNote, vaultRoot } from './storage.js';
+import { atomicWriteFile, ensureVaultRoot, updateSourceMapFromNote, vaultRoot } from './storage.js';
 import { seedVaultIfEmpty } from './seed.js';
-import { scheduleTocRebuild } from './toc.js';
+import { flushTocRebuild, scheduleTocRebuild } from './toc.js';
+
+// Upper bound for a single per-file claude spawn. Beyond this we assume
+// the agent hung on auth-prompt / network stall / internal deadlock,
+// SIGTERM it, and record an error so the file is retried on the next
+// run. Without this cap a single hung spawn freezes the entire loop and
+// Pause/Reset have no effect.
+const SPAWN_TIMEOUT_MS = 5 * 60_000;
 
 // File extensions that carry meaningful narrative — anything else is
 // skipped (binaries, lockfiles, generated bundles, etc.).
@@ -117,6 +124,24 @@ let cursor = 0;
 let runToken = 0;
 const listeners = new Set<(event: IndexerEvent) => void>();
 
+// Single-flight guard on start/resume/reset. Double clicks from the UI
+// can race the HTTP handlers; without this two runLoop() instances
+// could read the same queue, double-process files, and double-bill
+// the user. Held only across the synchronous portion of each public
+// entry point, NOT across the long-running runLoop itself.
+let lifecycleBusy = false;
+
+// The currently-running child process, if any. Tracked at module
+// scope so Pause/Reset can SIGTERM it instead of waiting for the
+// in-flight spawn to time out naturally.
+let activeProc: ChildProcess | null = null;
+
+function killActiveProc(): void {
+  if (!activeProc) return;
+  try { activeProc.kill('SIGTERM'); } catch { /* already gone */ }
+  activeProc = null;
+}
+
 export function getProgress(): IndexerProgress {
   return JSON.parse(JSON.stringify(state)) as IndexerProgress;
 }
@@ -178,68 +203,94 @@ async function loadIndexState(): Promise<IndexState> {
   return indexStateCache;
 }
 
+// Chain writes so two concurrent saveIndexState() calls don't collide
+// on the same temp-file. The atomic helper itself is safe per call
+// (unique tmp name), but mtime-tracking guarantees mean we want the
+// LAST snapshot to win, not whoever finishes the rename last.
+let indexStateWriteChain: Promise<void> = Promise.resolve();
+
 async function saveIndexState(): Promise<void> {
   if (!indexStateCache) return;
-  await mkdir(vaultRoot(), { recursive: true });
-  const file = path.join(vaultRoot(), STATE_FILENAME);
-  try {
-    await writeFile(file, JSON.stringify(indexStateCache, null, 2), 'utf-8');
-  } catch {
-    /* non-fatal */
-  }
+  const snapshot = JSON.stringify(indexStateCache, null, 2);
+  indexStateWriteChain = indexStateWriteChain.then(async () => {
+    try {
+      await mkdir(vaultRoot(), { recursive: true });
+      await atomicWriteFile(path.join(vaultRoot(), STATE_FILENAME), snapshot);
+    } catch {
+      /* non-fatal */
+    }
+  });
+  return indexStateWriteChain;
 }
 
 // --- Public API ---
 
 export async function start(repoRoot: string): Promise<void> {
-  if (state.status === 'running') return;
-  await ensureVaultRoot();
-  await seedVaultIfEmpty();
-  await loadIndexState();
+  if (lifecycleBusy) return;
+  lifecycleBusy = true;
+  try {
+    if (state.status === 'running') return;
+    await ensureVaultRoot();
+    await seedVaultIfEmpty();
+    await loadIndexState();
 
-  // Pre-compute counts per tier so the coverage bar shows full totals
-  // before any spawns run. We re-collect tier 1's queue first (the
-  // active queue), then totals for tiers 2/3 are pre-populated so the
-  // user sees "Тіер 1/3 · 0/24" + tier 2/3 totals as hints.
-  const t1 = collectTierFiles(repoRoot, 1, new Set());
-  const t1Set = new Set(t1);
-  const t2 = collectTierFiles(repoRoot, 2, t1Set);
-  const t2Set = new Set([...t1Set, ...t2]);
-  const t3 = collectTierFiles(repoRoot, 3, t2Set);
+    // Pre-compute counts per tier so the coverage bar shows full totals
+    // before any spawns run. We re-collect tier 1's queue first (the
+    // active queue), then totals for tiers 2/3 are pre-populated so the
+    // user sees "Тіер 1/3 · 0/24" + tier 2/3 totals as hints.
+    const t1 = collectTierFiles(repoRoot, 1, new Set());
+    const t1Set = new Set(t1);
+    const t2 = collectTierFiles(repoRoot, 2, t1Set);
+    const t2Set = new Set([...t1Set, ...t2]);
+    const t3 = collectTierFiles(repoRoot, 3, t2Set);
 
-  state.tier[1] = { total: t1.length, completed: 0, skipped: 0, failed: 0 };
-  state.tier[2] = { total: t2.length, completed: 0, skipped: 0, failed: 0 };
-  state.tier[3] = { total: t3.length, completed: 0, skipped: 0, failed: 0 };
-  recomputeAggregates();
+    state.tier[1] = { total: t1.length, completed: 0, skipped: 0, failed: 0 };
+    state.tier[2] = { total: t2.length, completed: 0, skipped: 0, failed: 0 };
+    state.tier[3] = { total: t3.length, completed: 0, skipped: 0, failed: 0 };
+    recomputeAggregates();
 
-  queue = t1;
-  cursor = 0;
-  state.currentTier = 1;
-  state.status = 'running';
-  state.currentFile = null;
-  state.startedAt = new Date().toISOString();
-  state.finishedAt = null;
-  state.lastError = null;
-  emitState();
-  emit({ kind: 'tier-start', tier: 1, total: t1.length });
-  void runLoop(repoRoot, ++runToken);
+    queue = t1;
+    cursor = 0;
+    state.currentTier = 1;
+    state.status = 'running';
+    state.currentFile = null;
+    state.startedAt = new Date().toISOString();
+    state.finishedAt = null;
+    state.lastError = null;
+    emitState();
+    emit({ kind: 'tier-start', tier: 1, total: t1.length });
+    void runLoop(repoRoot, ++runToken);
+  } finally {
+    lifecycleBusy = false;
+  }
 }
 
 export function pause(): void {
   if (state.status !== 'running') return;
   state.status = 'paused';
+  // Don't wait for the in-flight spawn to finish — kill it. The runLoop
+  // will see runToken matches and resolve the outcome as error, but
+  // the next iteration will check state.status and exit the loop.
+  killActiveProc();
   emitState();
 }
 
 export function resume(repoRoot: string): void {
-  if (state.status !== 'paused') return;
-  state.status = 'running';
-  emitState();
-  void runLoop(repoRoot, ++runToken);
+  if (lifecycleBusy) return;
+  lifecycleBusy = true;
+  try {
+    if (state.status !== 'paused') return;
+    state.status = 'running';
+    emitState();
+    void runLoop(repoRoot, ++runToken);
+  } finally {
+    lifecycleBusy = false;
+  }
 }
 
 export function reset(): void {
   runToken++;
+  killActiveProc();
   queue = [];
   cursor = 0;
   state.status = 'idle';
@@ -391,8 +442,12 @@ async function runLoop(repoRoot: string, token: number): Promise<void> {
   const indexState = await loadIndexState();
   while (token === runToken && state.status === 'running') {
     if (cursor >= queue.length) {
-      // Current tier done. Bump to next tier or finish.
+      // Current tier done. Bump to next tier or finish. Flush the
+      // master TOC at every tier boundary (and on full finish) so we
+      // have a durable on-disk snapshot at well-defined checkpoints,
+      // not just whenever the debounce timer happens to fire.
       emit({ kind: 'tier-done', tier: state.currentTier });
+      try { await flushTocRebuild(); } catch { /* TOC is best-effort */ }
       const next = nextTier(state.currentTier);
       if (next === null) {
         state.status = 'done';
@@ -551,7 +606,7 @@ async function indexOneFile(absFile: string, repoRoot: string, tier: Tier): Prom
   const prompt = buildPromptForTier(relPath, content, tier);
 
   return new Promise<IndexOutcome>((resolve) => {
-    let proc: ReturnType<typeof spawn>;
+    let proc: ChildProcess;
     try {
       proc = spawn('claude', [
         '-p',
@@ -567,6 +622,19 @@ async function indexOneFile(absFile: string, repoRoot: string, tier: Tier): Prom
       resolve({ kind: 'error', detail: (err as Error).message });
       return;
     }
+    // settle/timer/activeProc plumbing follows; we don't call resolve
+    // directly past this point.
+    activeProc = proc;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { proc.kill('SIGTERM'); } catch { /* already gone */ }
+    }, SPAWN_TIMEOUT_MS);
+    const settle = (outcome: IndexOutcome) => {
+      clearTimeout(timer);
+      if (activeProc === proc) activeProc = null;
+      resolve(outcome);
+    };
     let stdout = '';
     let stderr = '';
     proc.stdout?.setEncoding('utf-8');
@@ -574,9 +642,19 @@ async function indexOneFile(absFile: string, repoRoot: string, tier: Tier): Prom
     proc.stderr?.setEncoding('utf-8');
     proc.stderr?.on('data', (chunk: string) => { stderr += chunk; });
     proc.on('error', (err) => {
-      resolve({ kind: 'error', detail: err.message });
+      settle({ kind: 'error', detail: err.message });
     });
-    proc.on('exit', (code) => {
+    proc.on('exit', (code, signal) => {
+      if (timedOut) {
+        settle({ kind: 'error', detail: `timeout after ${Math.round(SPAWN_TIMEOUT_MS / 1000)}s (SIGTERM)` });
+        return;
+      }
+      if (signal === 'SIGTERM') {
+        // External kill (Pause/Reset). Treat as transient — no mtime
+        // save, retry on next run.
+        settle({ kind: 'error', detail: 'cancelled (SIGTERM)' });
+        return;
+      }
       if (code !== 0) {
         // Claude sometimes exits 1 with empty stderr — capture stdout
         // too so the UI shows whatever the agent did say before it
@@ -591,18 +669,18 @@ async function indexOneFile(absFile: string, repoRoot: string, tier: Tier): Prom
           stdoutSnip ? `stdout: ${stdoutSnip}` : null,
           (!stderrSnip && !stdoutSnip) ? '(no output — auth, rate limit, or PATH issue likely)' : null,
         ].filter(Boolean).join(' | ');
-        resolve({ kind: 'error', detail });
+        settle({ kind: 'error', detail });
         return;
       }
       const noteMatch = stdout.match(/Note (?:written|updated):\s*([^\n]+)/i);
       const skipMatch = stdout.match(/Skipped:\s*([^\n]+)/i);
       if (skipMatch) {
-        resolve({ kind: 'skipped', reason: skipMatch[1]!.trim() });
+        settle({ kind: 'skipped', reason: skipMatch[1]!.trim() });
         return;
       }
       const out: IndexOutcome = { kind: 'written' };
       if (noteMatch && noteMatch[1]) out.notePath = noteMatch[1].trim();
-      resolve(out);
+      settle(out);
     });
     proc.stdin?.write(prompt);
     proc.stdin?.end();

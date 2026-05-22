@@ -16,11 +16,24 @@ import {
   mkdir,
   readFile,
   readdir,
+  rename,
   rm,
   stat,
   writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
+
+// Atomic JSON write. Without this, a crash mid-write to .index-state.json
+// or .source-map.json truncates the file → next daemon start fails to
+// parse, falls back to defaults, and reindexes everything from scratch
+// (wasting tokens). Pattern: write to `<file>.tmp`, then rename onto
+// the target. POSIX rename is atomic; on Windows it's atomic on the same
+// volume, which is always the case for files under `.od/obsidian-global/`.
+export async function atomicWriteFile(file: string, content: string): Promise<void> {
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  await writeFile(tmp, content, 'utf-8');
+  await rename(tmp, file);
+}
 
 const VAULT_DIRNAME = path.join('.od', 'obsidian-global');
 const ATTACHMENTS_DIRNAME = '.attachments';
@@ -231,14 +244,24 @@ async function loadSourceMap(): Promise<Record<string, string>> {
   return sourceMapCache;
 }
 
+// Mutex to serialize read-modify-write on the source-map. Without it
+// two concurrent updateSourceMapFromNote() calls can both loadSourceMap()
+// → mutate the same in-memory cache → race on saveSourceMap, losing one
+// of the updates.
+let sourceMapWriteChain: Promise<void> = Promise.resolve();
+
 async function saveSourceMap(): Promise<void> {
   if (!sourceMapCache) return;
-  try {
-    await mkdir(vaultRoot(), { recursive: true });
-    await writeFile(sourceMapPath(), JSON.stringify(sourceMapCache, null, 2), 'utf-8');
-  } catch {
-    // Best-effort.
-  }
+  const snapshot = JSON.stringify(sourceMapCache, null, 2);
+  sourceMapWriteChain = sourceMapWriteChain.then(async () => {
+    try {
+      await mkdir(vaultRoot(), { recursive: true });
+      await atomicWriteFile(sourceMapPath(), snapshot);
+    } catch {
+      // Best-effort.
+    }
+  });
+  return sourceMapWriteChain;
 }
 
 export async function readNotePathForSource(sourceFile: string): Promise<string | null> {
