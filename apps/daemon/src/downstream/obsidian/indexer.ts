@@ -578,10 +578,20 @@ async function indexOneFile(absFile: string, repoRoot: string, tier: Tier): Prom
     });
     proc.on('exit', (code) => {
       if (code !== 0) {
-        resolve({
-          kind: 'error',
-          detail: `claude exit ${code}: ${stderr.slice(0, 200)}`,
-        });
+        // Claude sometimes exits 1 with empty stderr — capture stdout
+        // too so the UI shows whatever the agent did say before it
+        // bailed out (rate-limit message, auth prompt, internal
+        // error, etc.). Helps figure out why a whole tier is failing
+        // instead of staring at a bare exit code.
+        const stderrSnip = stderr.trim().slice(0, 200);
+        const stdoutSnip = stdout.trim().slice(0, 200);
+        const detail = [
+          `claude exit ${code}`,
+          stderrSnip ? `stderr: ${stderrSnip}` : null,
+          stdoutSnip ? `stdout: ${stdoutSnip}` : null,
+          (!stderrSnip && !stdoutSnip) ? '(no output — auth, rate limit, or PATH issue likely)' : null,
+        ].filter(Boolean).join(' | ');
+        resolve({ kind: 'error', detail });
         return;
       }
       const noteMatch = stdout.match(/Note (?:written|updated):\s*([^\n]+)/i);
