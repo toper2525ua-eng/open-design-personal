@@ -19,7 +19,7 @@
 
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -102,6 +102,75 @@ async function unzipWithTar(zipPath: string, destDir: string): Promise<void> {
       else reject(new Error(`tar exited with code ${code}: ${stderr.slice(0, 200)}`));
     });
   });
+}
+
+async function unzipWithPowerShell(zipPath: string, destDir: string): Promise<void> {
+  // Slow but reliable fallback when tar produces NULL-byte files (an
+  // observed interaction between Windows BSD tar and Defender real-time
+  // scanning on small top-level files).
+  await mkdir(destDir, { recursive: true });
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `Expand-Archive -LiteralPath '${zipPath.replaceAll("'", "''")}' -DestinationPath '${destDir.replaceAll("'", "''")}' -Force`,
+      ],
+      { windowsHide: true },
+    );
+    let stderr = "";
+    proc.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf-8");
+    });
+    proc.on("error", reject);
+    proc.on("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Expand-Archive exited with code ${code}: ${stderr.slice(0, 200)}`));
+    });
+  });
+}
+
+// We've observed Windows tar.exe producing NULL-byte versions of small
+// top-level files (resources/app/package.json, resources/app/main.cjs,
+// resources/open-design-config.json) when Defender real-time scanning
+// races extraction. Robocopy would then overwrite the installed copies
+// with the corrupted ones, leaving Electron unable to find a valid
+// `main` and falling back to default_app.asar. We MUST detect this
+// before robocopy runs, otherwise the install is silently bricked.
+async function validateUnpackedZip(unpackedDir: string): Promise<void> {
+  const jsonFiles = [
+    join(unpackedDir, "resources", "app", "package.json"),
+    join(unpackedDir, "resources", "open-design-config.json"),
+  ];
+  for (const file of jsonFiles) {
+    const content = await readFile(file, "utf-8");
+    if (content.length === 0 || content.charCodeAt(0) === 0) {
+      throw new Error(`unpack validation: ${file} is empty or NULL-byte corrupted`);
+    }
+    JSON.parse(content);
+  }
+  const mainCjs = await readFile(join(unpackedDir, "resources", "app", "main.cjs"), "utf-8");
+  if (!mainCjs.trimStart().startsWith("import")) {
+    throw new Error(
+      `unpack validation: main.cjs does not start with "import" (first bytes: ${JSON.stringify(mainCjs.slice(0, 20))})`,
+    );
+  }
+}
+
+async function unzipAndValidate(zipPath: string, destDir: string): Promise<void> {
+  await unzipWithTar(zipPath, destDir);
+  try {
+    await validateUnpackedZip(destDir);
+    return;
+  } catch (tarErr) {
+    console.warn(`[auto-updater] tar produced corrupted files (${String(tarErr)}); retrying with Expand-Archive`);
+  }
+  await rm(destDir, { recursive: true, force: true });
+  await unzipWithPowerShell(zipPath, destDir);
+  await validateUnpackedZip(destDir);
 }
 
 let registered = false;
@@ -192,7 +261,7 @@ async function applyUpdate(zipAsset: GithubReleaseAsset): Promise<void> {
 
   await mkdir(stagingDir, { recursive: true });
   await downloadFile(zipAsset.browser_download_url, zipPath);
-  await unzipWithTar(zipPath, unpackedDir);
+  await unzipAndValidate(zipPath, unpackedDir);
 
   // Generate a self-deleting batch that swaps the resources/ dir +
   // relaunches the existing executable. We force-kill the running app
