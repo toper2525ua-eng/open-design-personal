@@ -791,9 +791,13 @@
 }
 
 /* ---- Graph view ----
-   SVG-rendered force-directed graph. Parameters and color tokens mirror
-   Obsidian's defaults: --graph-node = muted text, --graph-line = subtle
-   border, --graph-node-focused = accent for active/hover. */
+   Canvas-rendered force-directed graph (react-force-graph-2d). The
+   library owns the canvas pixel space, so this stylesheet only handles
+   the shell: header with reset-zoom button, the wrap that sizes the
+   canvas, and the floating hint pill. The canvas itself is always
+   dark (set via the backgroundColor prop) regardless of app theme —
+   matches Obsidian, where graph view stays nocturnal even in light
+   mode so the colored nodes carry the contrast. */
 
 .obsidian-graph {
   display: flex;
@@ -842,86 +846,37 @@
   color: var(--text);
 }
 
+/* Canvas host. The library mounts a <canvas> inside; we just give it
+   the rectangle and a dark backdrop that bleeds to the edges. */
 .obsidian-graph__canvas-wrap {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
-  background: var(--bg);
+  background: #0e0e12;
   overflow: hidden;
 }
-/* Absolute-position the SVG so its size is decoupled from its viewBox
-   aspect ratio. Without this the browser sizes the SVG to width:100% +
-   height implied by viewBox (e.g. 4:3) and overflows the parent. */
-.obsidian-graph__canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+.obsidian-graph__canvas-wrap canvas {
   display: block;
   cursor: grab;
-  touch-action: none;
-  user-select: none;
 }
-.obsidian-graph__canvas.is-panning {
+.obsidian-graph__canvas-wrap canvas:active {
   cursor: grabbing;
 }
 
-/* SVG presentation attributes (stroke/fill) can be brittle with CSS
-   `var()` in some browsers — use explicit hex/rgba fallbacks paired with
-   the theme variables. The line color is intentionally subtle so nodes
-   stay the focal point. */
-.obsidian-graph__edge {
-  stroke: rgba(140, 140, 140, 0.45);
-  stroke-width: 1;
-  transition: stroke 120ms ease, stroke-width 120ms ease;
-}
-.obsidian-graph__edge.is-highlighted {
-  stroke: var(--accent);
-  stroke-width: 1.5;
-}
-
-.obsidian-graph__node {
-  cursor: pointer;
-}
-.obsidian-graph__node-circle {
-  fill: rgba(190, 190, 190, 0.85);
-  transition: fill 120ms ease;
-}
-.obsidian-graph__node.is-hover .obsidian-graph__node-circle {
-  fill: var(--accent);
-}
-/* Newly-arrived nodes from the live indexer feed pulse for a few
-   seconds so the user spots them appearing in real time. Matches the
-   hover-highlight colour so the visual vocabulary stays consistent. */
-.obsidian-graph__node.is-recent .obsidian-graph__node-circle {
-  fill: var(--accent);
-  animation: obsGraphNodePulse 1.2s ease-in-out infinite;
-}
-@keyframes obsGraphNodePulse {
-  0%, 100% { opacity: 0.55; }
-  50%      { opacity: 1; }
-}
-.obsidian-graph__node-label {
-  fill: rgba(190, 190, 190, 0.75);
-  font-size: 9px;
-  font-family: var(--serif);
-  pointer-events: none;
-  transition: fill 120ms ease;
-}
-.obsidian-graph__node.is-hover .obsidian-graph__node-label {
-  fill: var(--text-strong);
-}
-
+/* Floating bottom-right meta pill — node/edge counts and a brief
+   interaction hint. Sits over the canvas without intercepting events. */
 .obsidian-graph__hint {
   position: absolute;
   inset-block-end: 10px;
   inset-inline-end: 12px;
   font-size: 11px;
-  color: var(--text-muted);
-  background: var(--bg-panel);
-  padding: 4px 8px;
+  color: rgba(226, 232, 240, 0.7);
+  background: rgba(20, 20, 28, 0.75);
+  padding: 4px 9px;
   border-radius: 6px;
-  border: 1px solid var(--border);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   pointer-events: none;
-  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
 }
