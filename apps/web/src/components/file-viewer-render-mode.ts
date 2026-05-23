@@ -132,5 +132,12 @@ export function htmlNeedsSandboxShim(source: string): boolean {
   // reject hyphenated variants if a real case ever surfaces.
   if (/<script\s[^>]*\btype\s*=\s*["']?text\/babel\b/i.test(source)) return true;
   if (/\b(?:local|session)Storage\b/.test(source)) return true;
+  // Multi-page artifacts (typical for bot prototypes — `<a href="profile.html">`
+  // linking between screens) need srcDoc so the selection bridge's internal
+  // nav interceptor can route clicks through the host. Under URL-load the
+  // iframe would just navigate itself and OD's active-file state would
+  // drift out of sync with what the user actually sees on screen, so the
+  // next mode toggle would snap them back to the wrong file.
+  if (/<a\b[^>]*\bhref\s*=\s*["'](?!#|[a-z]+:|\/\/|\/)[^"']*\.html(?:[?#][^"']*)?["']/i.test(source)) return true;
   return false;
 }

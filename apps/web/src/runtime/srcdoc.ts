@@ -1154,7 +1154,33 @@ function meaningfulDomFallbackTarget(el) {
     hoveredId = null;
     window.parent.postMessage({ type: 'od:comment-leave' }, '*');
   }, true);
+  // Internal navigation interceptor. Multi-screen artifacts (typical for
+  // bot prototypes) link between files via plain anchor tags with relative
+  // href ending in .html. Without interception, a native click in srcDoc
+  // mode resolves against the injected base href and the iframe drifts
+  // off into URL-load on the new file — but OD active-file state stays on
+  // the original screen. The next mode toggle (Inspect / Comment / Edit)
+  // rebuilds srcDoc from the active file and snaps the user back to where
+  // they started. Route the click through the host instead so OD opens
+  // the right tab and the preview stays in sync with what the user sees.
+  function interceptInternalNav(ev){
+    var el = ev.target;
+    while (el && el !== document.documentElement) {
+      if (el.tagName === 'A' && el.getAttribute) {
+        var href = el.getAttribute('href');
+        if (href && /\\.html(\\?|#|$)/i.test(href) && !/^([a-z]+:|#|\\/\\/|\\/)/i.test(href)) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          try { window.parent.postMessage({ type: 'od:nav-request', href: href }, '*'); } catch (_) {}
+          return true;
+        }
+      }
+      el = el.parentElement;
+    }
+    return false;
+  }
   document.addEventListener('click', function(ev){
+    if (interceptInternalNav(ev)) return;
     if (!pickerActive()) return;
     var result = closestTarget(ev);
     if (result) {

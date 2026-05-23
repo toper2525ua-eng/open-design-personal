@@ -601,6 +601,11 @@ interface Props {
   onRemovePreviewComment?: (commentId: string) => Promise<void>;
   onSendBoardCommentAttachments?: (attachments: ChatCommentAttachment[]) => Promise<void> | void;
   onFileSaved?: () => Promise<void> | void;
+  /** Open another project file in the workspace tabs. Used by the
+   * internal-nav bridge so clicking <a href="other.html"> inside the
+   * iframe swaps the active file instead of letting the iframe drift
+   * out of sync with OD's active tab. */
+  onOpenFile?: (path: string) => void;
 }
 
 export function FileViewer({
@@ -617,6 +622,7 @@ export function FileViewer({
   onRemovePreviewComment,
   onSendBoardCommentAttachments,
   onFileSaved,
+  onOpenFile,
 }: Props) {
   const rendererMatch = artifactRendererRegistry.resolve({
     file,
@@ -664,6 +670,7 @@ export function FileViewer({
         onRemovePreviewComment={onRemovePreviewComment}
         onSendBoardCommentAttachments={onSendBoardCommentAttachments}
         onFileSaved={onFileSaved}
+        onOpenFile={onOpenFile}
       />
     );
   }
@@ -3394,6 +3401,7 @@ function HtmlViewer({
   onRemovePreviewComment,
   onSendBoardCommentAttachments,
   onFileSaved,
+  onOpenFile,
 }: {
   projectId: string;
   projectKind: TrackingProjectKind;
@@ -3408,6 +3416,7 @@ function HtmlViewer({
   onRemovePreviewComment?: (commentId: string) => Promise<void>;
   onSendBoardCommentAttachments?: (attachments: ChatCommentAttachment[]) => Promise<void> | void;
   onFileSaved?: () => Promise<void> | void;
+  onOpenFile?: (path: string) => void;
 }) {
   const t = useT();
   const analytics = useAnalytics();
@@ -4025,6 +4034,31 @@ function HtmlViewer({
   useEffect(() => {
     restorePreviewScrollPosition();
   }, [boardMode, manualEditMode, srcDoc, restorePreviewScrollPosition]);
+
+  // Internal nav from the iframe: the srcDoc bridge intercepts <a> clicks
+  // on relative *.html links and posts `od:nav-request` here instead of
+  // letting the iframe navigate itself. Resolve the href against the
+  // current file's directory and swap the active workspace tab so the
+  // preview stays in sync with what the user just clicked (e.g. nav-item
+  // taps inside a multi-screen bot prototype). Without this swap, the
+  // next Inspect/Comment toggle would rebuild srcDoc from the original
+  // file and drop the user back where they started.
+  useEffect(() => {
+    if (!onOpenFile) return;
+    function onMessage(ev: MessageEvent) {
+      if (!isOurPreviewIframeSource(ev.source)) return;
+      const data = ev.data as { type?: string; href?: string } | null;
+      if (!data || data.type !== 'od:nav-request') return;
+      const href = typeof data.href === 'string' ? data.href.trim() : '';
+      if (!href) return;
+      const cleaned = href.replace(/^\.\//, '').split('?')[0]!.split('#')[0]!;
+      if (!cleaned || /^([a-z]+:|\/\/|\/)/i.test(cleaned)) return;
+      const target = baseDirFor(file.name) + cleaned;
+      onOpenFile?.(target);
+    }
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [file.name, isOurPreviewIframeSource, onOpenFile]);
 
   useEffect(() => {
     function onMessage(ev: MessageEvent) {
