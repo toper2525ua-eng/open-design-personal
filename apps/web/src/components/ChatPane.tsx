@@ -907,13 +907,23 @@ function PinnedTodoSlot({
   // the card would pop out without animation.
   const [exiting, setExiting] = useState(false);
   const input = latestTodoWriteInputFromMessages(messages);
-  if (input == null) return null;
-  let snapshotKey: string;
-  try {
-    snapshotKey = JSON.stringify(input);
-  } catch {
-    snapshotKey = String(input);
+  let snapshotKey: string | null = null;
+  if (input != null) {
+    try {
+      snapshotKey = JSON.stringify(input);
+    } catch {
+      snapshotKey = String(input);
+    }
   }
+  // Reset `exiting` whenever the snapshot identity changes. Without this,
+  // a fresh TodoWrite arriving after a previous dismiss leaves `exiting`
+  // stuck at true: the re-shown card renders with .chat-pinned-todo-exit
+  // (opacity 0, transform 24px) but still claims its full layout height,
+  // collapsing the chat log to 0px and making the chat appear empty.
+  useEffect(() => {
+    setExiting(false);
+  }, [snapshotKey]);
+  if (input == null || snapshotKey == null) return null;
   if (snapshotKey === dismissedKey) return null;
   return (
     <div className={`chat-pinned-todo${exiting ? ' chat-pinned-todo-exit' : ''}`}>
