@@ -11124,6 +11124,24 @@ button.connector-action.is-loading {
   z-index: 3;
   pointer-events: none;
 }
+/* In non-desktop viewports `.comment-frame-clip` is a flex item centered in
+   a padded scroll container, so its origin no longer matches the parent
+   .comment-preview-layer. Overlay coordinates come from iframe-content
+   space (getBoundingClientRect inside the iframe), so the layer has to
+   sit exactly on top of `.comment-frame-clip` — same width/height, same
+   padding offset, same horizontal center — for the highlight rectangles
+   to land on the elements the user actually hovers. Keep the 24px top
+   offset in sync with `.preview-viewport:not(.preview-viewport-desktop)`
+   `padding`. */
+.preview-viewport:not(.preview-viewport-desktop) .comment-overlay-layer {
+  inset: auto;
+  top: 24px;
+  left: 50%;
+  width: calc(var(--preview-viewport-width) * var(--preview-scale, 1));
+  height: calc(var(--preview-viewport-height) * var(--preview-scale, 1));
+  transform: translateX(-50%);
+  overflow: visible;
+}
 .board-pod-stroke {
   position: absolute;
   inset: 0;
@@ -14196,6 +14214,17 @@ button.ghost.mcp-copy-btn:hover:not(:disabled) {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
   border-bottom: 0;
+}
+/* When the agent emits a long TodoWrite (20+ items for multi-file
+   refactors), the pinned card would otherwise expand to its full
+   intrinsic height and shrink `.chat-pinned-todo`'s sibling
+   `.chat-log-wrap` to zero (same root cause as the stale-exit bug,
+   different trigger). Cap the inner list and let it scroll on its own
+   so the chat log retains its share of the pane. */
+.chat-pinned-todo .op-todo .todo-list {
+  max-height: 280px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 /*
