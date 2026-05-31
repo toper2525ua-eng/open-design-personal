@@ -202,16 +202,29 @@ export async function renderOpenRouterVideo(
     resolution: '720p',
     generate_audio: true,
   };
-  // Reference-to-video: when the caller passes --image, forward it as an
-  // `input_references` entry (soft visual guidance — NOT `frame_images`,
-  // which pin exact first/last frames). OpenRouter's unified video schema
-  // accepts this across models; Seedance 2.0 in particular leans on it to
-  // preserve character + style consistency from the reference, which is the
-  // main reason to route image-to-video through it. We pass the base64
-  // data URL directly, the way the image renderer + Volcengine i2v do.
+  // Image-to-video: when the caller passes --image, pin it as the FIRST
+  // FRAME via `frame_images` (frame_type:'first_frame') so the clip starts
+  // from the exact uploaded image and animates forward. That is what users
+  // mean by "make a video FROM this photo" — the character/scene is
+  // reproduced faithfully, rather than merely nudged toward it (which is
+  // what `input_references` does — loose style/identity guidance, fresh
+  // pixels). Both Seedance 2.0 and Veo 3.1 accept this on OpenRouter's
+  // unified /videos schema. Verified end-to-end 2026-05-31 against
+  // bytedance/seedance-2.0-fast (queued → processing → completed, real mp4).
+  //
+  // Provider moderation heads-up: ByteDance/Google REJECT reference images
+  // that look like a real human face/person (anti-deepfake) — this fires
+  // even on photoreal 3D renders. Flat 2D / cartoon illustrations pass. On
+  // rejection the submit returns HTTP 202 with an `error` body, which the
+  // guard right after the submit parse surfaces verbatim instead of the
+  // generic "no polling_url" message.
   if (ctx.imageRef?.dataUrl) {
-    body.input_references = [
-      { type: 'image_url', image_url: { url: ctx.imageRef.dataUrl } },
+    body.frame_images = [
+      {
+        type: 'image_url',
+        image_url: { url: ctx.imageRef.dataUrl },
+        frame_type: 'first_frame',
+      },
     ];
   }
 
@@ -229,6 +242,22 @@ export async function renderOpenRouterVideo(
     submitData = JSON.parse(submitText);
   } catch {
     throw new Error(`openrouter video non-JSON: ${truncate(submitText, 200)}`);
+  }
+  // OpenRouter can answer the submit with HTTP 202 yet carry an upstream
+  // rejection in the body — most notably a provider moderation block for
+  // "input image may contain real person" on i2v. Surface that real reason
+  // here; otherwise the no-id/no-polling_url branch below masks it as a
+  // generic "no polling_url" error and the agent silently falls back to
+  // text-only t2v (dropping the user's reference image entirely).
+  if (submitData && submitData.error) {
+    const e = submitData.error;
+    const msg =
+      e && typeof e === 'object' && typeof e.message === 'string'
+        ? e.message
+        : typeof e === 'string'
+          ? e
+          : JSON.stringify(e);
+    throw new Error(`openrouter video rejected: ${truncate(msg, 300)}`);
   }
 
   const requestId: string | null = submitData?.id || submitData?.generation_id || null;
