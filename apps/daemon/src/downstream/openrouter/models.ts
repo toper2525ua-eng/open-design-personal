@@ -7,7 +7,7 @@ import type { MediaModel, MediaProvider } from '../../media-models.js';
 export const OPENROUTER_PROVIDER: MediaProvider = {
   id: 'openrouter',
   label: 'OpenRouter',
-  hint: 'OpenAI-compatible gateway: nano-banana-2 (image) + Veo 3.1 (video)',
+  hint: 'OpenAI-compatible gateway: nano-banana-2 (image) + Veo 3.1 / Seedance 2.0 (video)',
   integrated: true,
   defaultBaseUrl: 'https://openrouter.ai/api/v1',
   supportsCustomModel: true,
@@ -37,5 +37,19 @@ export const OPENROUTER_VIDEO_MODELS: MediaModel[] = [
     hint: 'Veo 3.1 Fast · cheaper variant',
     provider: 'openrouter',
     caps: ['t2v', 'audio'],
+  },
+  {
+    id: 'openrouter-seedance-2.0',
+    label: 'seedance-2.0 (OpenRouter)',
+    hint: 'ByteDance Seedance 2.0 · routed via OpenRouter; t2v + i2v + reference + audio',
+    provider: 'openrouter',
+    caps: ['t2v', 'i2v', 'audio'],
+  },
+  {
+    id: 'openrouter-seedance-2.0-fast',
+    label: 'seedance-2.0-fast (OpenRouter)',
+    hint: 'Seedance 2.0 Fast · cheaper/faster variant',
+    provider: 'openrouter',
+    caps: ['t2v', 'i2v', 'audio'],
   },
 ];

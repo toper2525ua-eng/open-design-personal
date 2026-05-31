@@ -6,7 +6,10 @@
 // Video: POST /videos returns { id, polling_url, status }; we poll
 //   polling_url until status='completed', then download
 //   unsigned_urls[0] with Bearer auth (OpenRouter's unsigned URLs still
-//   require the API key when the host is openrouter.ai).
+//   require the API key when the host is openrouter.ai). The same job
+//   schema drives every video model (Veo 3.1, Seedance 2.0, …); we map
+//   our registry ids to OpenRouter wire ids below and forward an optional
+//   `--image` as an `input_references` entry for reference-to-video.
 //
 // Defaults: base URL https://openrouter.ai/api/v1, auth via
 // `Authorization: Bearer <OPENROUTER_API_KEY>`. We also send HTTP-Referer
@@ -26,6 +29,8 @@ const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
 const OPENROUTER_VIDEO_MODEL_MAP: Record<string, string> = {
   'openrouter-veo-3.1': 'google/veo-3.1',
   'openrouter-veo-3.1-fast': 'google/veo-3.1-fast',
+  'openrouter-seedance-2.0': 'bytedance/seedance-2.0',
+  'openrouter-seedance-2.0-fast': 'bytedance/seedance-2.0-fast',
 };
 
 const OPENROUTER_IMAGE_MODEL_MAP: Record<string, string> = {
@@ -168,20 +173,26 @@ export async function renderOpenRouterVideo(
 
   const aspectRatio = openRouterAspect(ctx.aspect);
   const requested = ctx.length || 8;
-  // Veo 3.1 only accepts {4, 6, 8}-second durations on OpenRouter — sending
-  // any other integer 422s the request. Snap to the closest allowed value
-  // so the user's pick from VIDEO_LENGTHS_SEC (3 / 5 / 8 / …) doesn't blow
-  // up the job after they've already paid the round-trip latency.
-  // See https://openrouter.ai/google/veo-3.1.
+  // Each model family on OpenRouter accepts a different duration domain;
+  // an out-of-range integer 422s the job after the user has already paid
+  // the submit round-trip. Snap the pick from VIDEO_LENGTHS_SEC
+  // (3 / 5 / 8 / 10 / 15 / 30) into the family's allowed set:
+  //   * Veo 3.1  → {4, 6, 8}s only.    https://openrouter.ai/google/veo-3.1
+  //   * Seedance → any integer 4–15s.  https://openrouter.ai/bytedance/seedance-2.0
   const isVeo = /^google\/veo-/.test(wireModel);
-  const veoAllowed = [4, 6, 8];
+  const isSeedance = /^bytedance\/seedance-/.test(wireModel);
   const clamped = Math.min(Math.max(requested, 1), 30);
-  const durationSec = isVeo
-    ? veoAllowed.reduce(
-        (best, n) => (Math.abs(n - clamped) < Math.abs(best - clamped) ? n : best),
-        8,
-      )
-    : clamped;
+  let durationSec: number;
+  if (isVeo) {
+    durationSec = [4, 6, 8].reduce(
+      (best, n) => (Math.abs(n - clamped) < Math.abs(best - clamped) ? n : best),
+      8,
+    );
+  } else if (isSeedance) {
+    durationSec = Math.min(Math.max(clamped, 4), 15);
+  } else {
+    durationSec = clamped;
+  }
 
   const body: Record<string, unknown> = {
     model: wireModel,
@@ -191,6 +202,18 @@ export async function renderOpenRouterVideo(
     resolution: '720p',
     generate_audio: true,
   };
+  // Reference-to-video: when the caller passes --image, forward it as an
+  // `input_references` entry (soft visual guidance — NOT `frame_images`,
+  // which pin exact first/last frames). OpenRouter's unified video schema
+  // accepts this across models; Seedance 2.0 in particular leans on it to
+  // preserve character + style consistency from the reference, which is the
+  // main reason to route image-to-video through it. We pass the base64
+  // data URL directly, the way the image renderer + Volcengine i2v do.
+  if (ctx.imageRef?.dataUrl) {
+    body.input_references = [
+      { type: 'image_url', image_url: { url: ctx.imageRef.dataUrl } },
+    ];
+  }
 
   const submitResp = await fetch(`${baseUrl}/videos`, {
     method: 'POST',

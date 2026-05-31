@@ -34,6 +34,14 @@ export type DownstreamMediaContext = {
   prompt: string;
   aspect: string | undefined;
   length: number | undefined;
+  /**
+   * Resolved reference image for image-to-video / reference-to-video and
+   * image-edit flows. Present only when the caller passed `--image`;
+   * null/undefined otherwise. Structural subset of the upstream
+   * MediaContext.imageRef so the dispatcher can hand a full MediaContext
+   * to a downstream renderer without a cast.
+   */
+  imageRef?: { dataUrl: string; mime?: string } | null;
 };
 
 export type DownstreamMediaRenderer = (
