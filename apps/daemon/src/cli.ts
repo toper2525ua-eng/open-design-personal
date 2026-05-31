@@ -46,6 +46,7 @@ const MEDIA_GENERATE_STRING_FLAGS = new Set([
   'audio-kind',
   'composition-dir',
   'image',
+  'image-mode',
   'daemon-url',
   'language',
 ]);
@@ -485,6 +486,7 @@ async function runMediaGenerate(rawArgs) {
     audioKind: flags['audio-kind'],
     compositionDir: flags['composition-dir'],
     image: flags.image,
+    imageMode: flags['image-mode'],
     language: flags.language,
   };
   if (flags.length != null) body.length = Number(flags.length);
@@ -766,6 +768,12 @@ Common options:
                             future image-edit endpoints). Daemon reads
                             the file from the project, base64-encodes
                             it, and forwards it to the upstream API.
+  --image-mode <mode>       How --image is used for OpenRouter video:
+                            first-frame (default) pins it as the literal
+                            first frame ("animate THIS photo"); reference
+                            passes it as a character/style reference so
+                            the model renders fresh scenes from the prompt
+                            (storyboard grid -> multi-scene clip).
   --daemon-url <url>
 
 Output: a single line of JSON: {"file": { name, size, kind, mime, ... }}.

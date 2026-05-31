@@ -202,14 +202,26 @@ export async function renderOpenRouterVideo(
     resolution: '720p',
     generate_audio: true,
   };
-  // Image-to-video: when the caller passes --image, pin it as the FIRST
-  // FRAME via `frame_images` (frame_type:'first_frame') so the clip starts
-  // from the exact uploaded image and animates forward. That is what users
-  // mean by "make a video FROM this photo" — the character/scene is
-  // reproduced faithfully, rather than merely nudged toward it (which is
-  // what `input_references` does — loose style/identity guidance, fresh
-  // pixels). Both Seedance 2.0 and Veo 3.1 accept this on OpenRouter's
-  // unified /videos schema. Verified end-to-end 2026-05-31 against
+  // Image-to-video: when the caller passes --image we wire it into the
+  // request one of two ways, selected by `--image-mode` (ctx.imageMode):
+  //
+  //   * 'first-frame' (DEFAULT): pin it as the literal FIRST FRAME via
+  //     `frame_images` (frame_type:'first_frame') so the clip starts from
+  //     the exact uploaded image and animates forward. That is what users
+  //     mean by "make a video FROM this photo" — the character/scene is
+  //     reproduced faithfully. Best for a single character portrait.
+  //
+  //   * 'reference': pass it as a character/style reference via
+  //     `input_references` — the model keeps the subject's identity and
+  //     style but renders FRESH scenes from the prompt. This is the
+  //     storyboard recipe: feed a multi-panel grid here + a narrative
+  //     prompt listing each scene, and the model produces a multi-scene
+  //     clip where each scene matches its panel. Verified end-to-end
+  //     2026-05-31 (full bytedance/seedance-2.0, 6-panel cake grid → 10s
+  //     clip with matching scenes).
+  //
+  // Both fields ride OpenRouter's unified /videos schema (Seedance 2.0,
+  // Veo 3.1). Verified first-frame path 2026-05-31 against
   // bytedance/seedance-2.0-fast (queued → processing → completed, real mp4).
   //
   // Provider moderation heads-up: ByteDance/Google REJECT reference images
@@ -219,13 +231,19 @@ export async function renderOpenRouterVideo(
   // guard right after the submit parse surfaces verbatim instead of the
   // generic "no polling_url" message.
   if (ctx.imageRef?.dataUrl) {
-    body.frame_images = [
-      {
-        type: 'image_url',
-        image_url: { url: ctx.imageRef.dataUrl },
-        frame_type: 'first_frame',
-      },
-    ];
+    if (ctx.imageMode === 'reference') {
+      body.input_references = [
+        { type: 'image_url', image_url: { url: ctx.imageRef.dataUrl } },
+      ];
+    } else {
+      body.frame_images = [
+        {
+          type: 'image_url',
+          image_url: { url: ctx.imageRef.dataUrl },
+          frame_type: 'first_frame',
+        },
+      ];
+    }
   }
 
   const submitResp = await fetch(`${baseUrl}/videos`, {
@@ -356,9 +374,12 @@ export async function renderOpenRouterVideo(
   const arr = await dlResp.arrayBuffer();
   const bytes = Buffer.from(arr);
 
+  const modeNote = ctx.imageRef?.dataUrl
+    ? ` · ${ctx.imageMode === 'reference' ? 'i2v:reference' : 'i2v:first-frame'}`
+    : '';
   return {
     bytes,
-    providerNote: `openrouter/${wireModel} · ${aspectRatio} · ${durationSec}s · ${bytes.length} bytes`,
+    providerNote: `openrouter/${wireModel} · ${aspectRatio} · ${durationSec}s${modeNote} · ${bytes.length} bytes`,
     suggestedExt: '.mp4',
   };
 }

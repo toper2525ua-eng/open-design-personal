@@ -252,6 +252,27 @@ showed it crashed).
   daemon reads the file from the project, base64-encodes it, and
   forwards it as the model's \`image_url\` input. Path traversal
   outside the project is rejected.
+
+  OpenRouter video models (\`openrouter-seedance-2.0\`,
+  \`openrouter-seedance-2.0-fast\`, \`openrouter-veo-3.1\`,
+  \`openrouter-veo-3.1-fast\`) take \`--image\` too, with a
+  \`--image-mode\` selector for HOW the image is used:
+    * \`--image-mode first-frame\` (default) pins the image as the literal
+      first frame — the clip starts from that exact picture and animates
+      forward. Use for "animate THIS photo" (one character portrait).
+    * \`--image-mode reference\` passes it as a character/style reference —
+      the model keeps the subject's identity and style but renders FRESH
+      scenes from the prompt. Use the STORYBOARD recipe: generate one
+      multi-panel storyboard grid image (consistent character, all scenes),
+      pass it here, and write a NARRATIVE \`--prompt\` listing each scene in
+      order; the model returns a single multi-scene clip whose scenes match
+      the panels. This is the cheapest way to make a multi-scene story in
+      one generation.
+  Provider moderation note: ByteDance/Google reject reference images that
+  look like a real human face/person (anti-deepfake) — this fires even on
+  photoreal 3D renders. Flat 2D / cartoon illustration styles pass. If a
+  generation is rejected, the error is surfaced verbatim; switch the source
+  art to a stylized 2D look rather than retrying the same realistic image.
 - **audio · music**:  ${AUDIO_MUSIC_IDS}
 - **audio · speech**: ${AUDIO_SPEECH_IDS}
 - **audio · sfx**:    ${AUDIO_SFX_IDS}

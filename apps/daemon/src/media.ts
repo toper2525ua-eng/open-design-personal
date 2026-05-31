@@ -108,6 +108,7 @@ type MediaContext = {
   promptInfluence: number | undefined;
   compositionDir: string | null;
   imageRef: ImageRef | null;
+  imageMode: 'first-frame' | 'reference' | undefined;
 };
 type RenderResult = { bytes: Buffer; providerNote: string; suggestedExt?: string };
 type JsonRecord = Record<string, unknown>;
@@ -285,7 +286,8 @@ export async function generateMedia(args: {
   projectRoot: string; projectsRoot: string; projectId: string; surface: MediaSurface; model: string;
   prompt?: string; output?: string; aspect?: string; length?: number; duration?: number; voice?: string;
   audioKind?: AudioKind; language?: string; loop?: boolean; promptInfluence?: number;
-  compositionDir?: string; image?: string; onProgress?: ProgressFn;
+  compositionDir?: string; image?: string; imageMode?: 'first-frame' | 'reference';
+  onProgress?: ProgressFn;
 }) {
   const {
     projectRoot,
@@ -305,6 +307,7 @@ export async function generateMedia(args: {
     promptInfluence,
     compositionDir,
     image,
+    imageMode,
   } = args;
 
   if (!projectRoot) throw new Error('projectRoot required');
@@ -414,6 +417,13 @@ export async function generateMedia(args: {
     // Resolved reference image for i2v / image-edit flows. `null` when
     // the agent didn't pass --image. See resolveProjectImage below.
     imageRef,
+    // How the image should be wired into a video request: 'first-frame'
+    // (default — pin as literal first frame) or 'reference' (character/
+    // style guidance, used for the storyboard-grid → multi-scene recipe).
+    // Already validated to the literal union at the call boundary
+    // (server.ts sanitizes untrusted body input); shorthand keeps the type
+    // instead of widening to `string` inside this object literal.
+    imageMode,
   };
 
   const credentials = await resolveProviderConfig(projectRoot, def.provider);
