@@ -53,6 +53,7 @@
 
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb, spawn } from 'node:child_process';
+import { createCommandInvocation } from '@open-design/platform';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -2005,12 +2006,31 @@ async function renderOpenRouterImage(
     ? ['image', 'text']
     : ['image'];
 
+  // Image-to-image: референси йдуть у той самий message як multimodal
+  // content — це OpenAI-сумісна форма, яку OpenRouter приймає для
+  // image-моделей. Без них запит вироджується в text-to-image: промпт
+  // на кшталт "keep the same character as the reference" не має до чого
+  // прив'язатись, і модель малює когось іншого.
+  const refs = ctx.imageRefs.length > 0
+    ? ctx.imageRefs
+    : (ctx.imageRef ? [ctx.imageRef] : []);
+  const promptText = ctx.prompt || 'A high-quality reference image.';
+  const content = refs.length > 0
+    ? [
+        { type: 'text', text: promptText },
+        ...refs.map((ref) => ({
+          type: 'image_url',
+          image_url: { url: ref.dataUrl },
+        })),
+      ]
+    : promptText;
+
   const body: Record<string, unknown> = {
     model: wireModel,
     messages: [
       {
         role: 'user',
-        content: ctx.prompt || 'A high-quality reference image.',
+        content,
       },
     ],
     modalities,
@@ -4097,9 +4117,13 @@ async function assertHyperFramesCompositionFile(
  */
 function runHyperFramesRender(compAbs: string, tmpOutput: string, onProgress?: ProgressFn): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    const child = spawn(
-      'npx',
-      [
+    // On Windows the npm shim is `npx.cmd`; bare `npx` has no executable
+    // for CreateProcess to find, so spawn fails with ENOENT before HF
+    // ever starts. Route through createCommandInvocation so the cmd.exe
+    // quoting is built the same way as every other spawn in the daemon.
+    const invocation = createCommandInvocation({
+      command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
+      args: [
         '-y',
         'hyperframes',
         'render',
@@ -4109,12 +4133,17 @@ function runHyperFramesRender(compAbs: string, tmpOutput: string, onProgress?: P
         '--workers',
         '1',
       ],
+    });
+    const child = spawn(
+      invocation.command,
+      invocation.args,
       {
         // Inherit env so npx can find the cached hyperframes install
         // and any user-level node config. stdin closed (HF doesn't
         // read from it), stdout/stderr piped so we can stream.
         env: process.env,
         stdio: ['ignore', 'pipe', 'pipe'],
+        windowsVerbatimArguments: invocation.windowsVerbatimArguments,
       },
     );
 

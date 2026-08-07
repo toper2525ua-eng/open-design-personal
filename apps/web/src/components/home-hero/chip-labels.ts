@@ -30,6 +30,8 @@ export function homeHeroChipLabel(chipId: string, t: Translate): string {
     case 'create-plugin': return t('homeHero.chip.createPlugin');
     case 'figma': return t('homeHero.chip.figma');
     case 'template': return t('homeHero.chip.template');
+    // Локальний плагін — назва не з Dict, бо ключа в локалях немає.
+    case 'instagram-post': return 'Instagram Post (UA)';
     default: return chipId;
   }
 }

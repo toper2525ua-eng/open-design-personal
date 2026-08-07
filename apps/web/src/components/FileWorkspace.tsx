@@ -141,6 +141,7 @@ import { MissingBrandFontsBanner } from './MissingBrandFontsBanner';
 import { LibraryPicker } from './LibraryPicker';
 import { QuickSwitcher } from './QuickSwitcher';
 import { SketchEditor } from './SketchEditor';
+import { MapStudio } from '../map-studio/MapStudio';
 import { SketchEnginePrewarm } from './SketchEnginePrewarm';
 import {
   emptySketchScene,
@@ -347,6 +348,7 @@ function shouldKeepCurrentSketchState(
 
 export const DESIGN_FILES_TAB = '__design_files__';
 export const DESIGN_SYSTEM_TAB = '__design_system__';
+const MAP_STUDIO_TAB = '__map_studio__';
 
 // Module-level default so a caller that omits `previewComments` doesn't mint
 // a fresh [] every render — that identity feeds the memoized FileViewer.
@@ -1795,6 +1797,7 @@ export function FileWorkspace({
     if (
       activeTab === DESIGN_FILES_TAB
       || activeTab === DESIGN_SYSTEM_TAB
+      || activeTab === MAP_STUDIO_TAB
     ) return;
     if (isBrowserTabId(activeTab)) {
       if (!browserTabs.some((tab) => tab.id === activeTab)) {
@@ -2038,7 +2041,11 @@ export function FileWorkspace({
 
   function closeActiveWorkspaceTab() {
     if (!workspaceTabIds.includes(activeTab)) return;
-    if (activeTab === DESIGN_FILES_TAB || activeTab === DESIGN_SYSTEM_TAB) return;
+    if (
+      activeTab === DESIGN_FILES_TAB
+      || activeTab === DESIGN_SYSTEM_TAB
+      || activeTab === MAP_STUDIO_TAB
+    ) return;
     if (isBrowserTabId(activeTab)) {
       closeBrowserTab(activeTab);
       return;
@@ -2236,7 +2243,11 @@ export function FileWorkspace({
   // The Pages switcher is already sticky-pinned, so we only scroll
   // for real workspace tabs. Issue #775.
   useEffect(() => {
-    if (activeTab === DESIGN_FILES_TAB || activeTab === DESIGN_SYSTEM_TAB) return;
+    if (
+      activeTab === DESIGN_FILES_TAB
+      || activeTab === DESIGN_SYSTEM_TAB
+      || activeTab === MAP_STUDIO_TAB
+    ) return;
     const tabBar = tabsBarRef.current;
     if (!tabBar) return;
     const el = tabBar.querySelector<HTMLElement>('.ws-tab.active');
@@ -2818,6 +2829,7 @@ export function FileWorkspace({
     if (
       activeTab === DESIGN_FILES_TAB
       || activeTab === DESIGN_SYSTEM_TAB
+      || activeTab === MAP_STUDIO_TAB
       || isBrowserTabId(activeTab)
     ) return null;
     const onDisk = visibleFiles.find((f) => f.name === activeTab);
@@ -2841,6 +2853,7 @@ export function FileWorkspace({
     if (
       activeTab === DESIGN_FILES_TAB
       || activeTab === DESIGN_SYSTEM_TAB
+      || activeTab === MAP_STUDIO_TAB
       || isBrowserTabId(activeTab)
     ) return null;
     return liveArtifactEntries.find((entry) => entry.tabId === activeTab) ?? null;
@@ -3419,6 +3432,19 @@ export function FileWorkspace({
               <span className="ws-tab-label">{t('dsManager.tabDesignSystem')}</span>
             </button>
           ) : null}
+          <button
+            type="button"
+            className={`ws-tab map-studio-tab ${activeTab === MAP_STUDIO_TAB ? 'active' : ''}`}
+            role="tab"
+            aria-selected={activeTab === MAP_STUDIO_TAB}
+            tabIndex={0}
+            data-testid="map-studio-tab"
+            onClick={() => setActiveTab(MAP_STUDIO_TAB)}
+            title="Map Studio"
+          >
+            <span className="tab-icon" aria-hidden>🗺️</span>
+            <span className="ws-tab-label">Карта</span>
+          </button>
           <div className="ws-pages-menu-anchor" ref={pagesMenuRef} role="presentation">
             <button
               ref={pagesMenuButtonRef}
@@ -3670,6 +3696,13 @@ export function FileWorkspace({
             editFocusRequest={designSystemEditRequest}
             onConnectRepo={onConnectRepo}
             githubConnected={githubConnected}
+          />
+        ) : activeTab === MAP_STUDIO_TAB ? (
+          <MapStudio
+            projectId={projectId}
+            files={visibleFiles}
+            onUpload={() => fileInputRef.current?.click()}
+            onRefreshFiles={onRefreshFiles}
           />
         ) : activeTab === DESIGN_FILES_TAB ? (
           <DesignFilesPanel

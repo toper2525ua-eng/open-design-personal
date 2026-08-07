@@ -39,7 +39,10 @@ export type ChipScenarioPluginId =
   // their own bundled example plugins under plugins/_official/examples/, so —
   // like example-hyperframes — they carry their plugin id directly rather than
   // routing through the default kind→plugin table.
-  | 'example-webgl-experience';
+  | 'example-webgl-experience'
+  // Локальний плагін власника, встановлений з D:\od-plugins/. Не bundled,
+  // тому в DefaultScenarioPluginId його немає — несе свій id напряму.
+  | 'create-instagram-post';
 
 export type ChipAction =
   | {
@@ -248,6 +251,18 @@ export const HOME_HERO_CHIPS: ReadonlyArray<HomeHeroChip> = [
     // primary category list, so the rail picks it up too rather than
     // hiding the specialised bucket behind the generic Video chip.
     action: { kind: 'apply-scenario', pluginId: 'example-hyperframes', projectKind: 'video' },
+  },
+  {
+    id: 'instagram-post',
+    label: 'Instagram Post (UA)',
+    icon: 'play',
+    group: 'create',
+    description: 'Вертикальні Reels українською',
+    hint: 'Ролик про вайб-кодинг: постійний ведучий, пословні субтитри, анімовані стікери.',
+    // Локальний плагін (D:\od-plugins\create-instagram-post). Список
+    // шаблонів будується з цього масиву, а не з реєстру плагінів, тому
+    // встановлений плагін без запису тут у меню не видно.
+    action: { kind: 'apply-scenario', pluginId: 'create-instagram-post', projectKind: 'video' },
   },
   {
     id: 'webgl',
