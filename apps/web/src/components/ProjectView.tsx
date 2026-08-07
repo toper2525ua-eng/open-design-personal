@@ -239,6 +239,7 @@ import { buildRepoImportPrompt, designSystemNeedsRepoConnect } from './design-sy
 import { isDesignSystemProject, resolveProjectDesignSystemId } from './design-system-project';
 import { collectReferencedJsxNames } from '../runtime/jsx-module-refs';
 import { DESIGN_SYSTEM_TAB, FileWorkspace, type BrowserOpenRequest } from './FileWorkspace';
+import { PostWorkspace } from '../post-studio/PostWorkspace';
 import {
   type PluginFolderAgentAction,
 } from './design-files/pluginFolderActions';
@@ -1522,6 +1523,10 @@ export function ProjectView({
   const [liveArtifacts, setLiveArtifacts] = useState<LiveArtifactSummary[]>([]);
   const [liveArtifactEvents, setLiveArtifactEvents] = useState<LiveArtifactEventItem[]>([]);
   const [workspaceFocused, setWorkspaceFocused] = useState(false);
+  // Проєкт із post.json відкривається одразу в пост-режимі — інакше ролик
+  // щоразу починався б із дерева файлів, де робити нічого. Перемикач
+  // повертає звичайний воркспейс на час сесії.
+  const [postFilesView, setPostFilesView] = useState(false);
   const [commentInspectorActive, setCommentInspectorActive] = useState(false);
   const commentInspectorPortalId = useId();
   const leftInspectorActive = commentInspectorActive;
@@ -8730,6 +8735,17 @@ export function ProjectView({
             />
           )
         ) : null}
+        {(currentProject.metadata?.kind === 'video' || projectFiles.some((f) => f.name === 'post.json'))
+          && !postFilesView ? (
+          <PostWorkspace
+            projectId={project.id}
+            files={projectFiles}
+            onUpload={() => setPostFilesView(true)}
+            onRefreshFiles={() => refreshWorkspaceItems().then(() => undefined)}
+            onAskClaude={handleBrowserUsePrompt}
+            onExit={() => setPostFilesView(true)}
+          />
+        ) : (
         <FileWorkspace
           projectId={project.id}
           projectKind={projectKindFromMetadataToTracking(currentProject.metadata) ?? 'prototype'}
@@ -8849,6 +8865,7 @@ export function ProjectView({
             </>
           )}
         />
+        )}
       </div>
       {contextPluginDetails ? (
         <PluginDetailsModal

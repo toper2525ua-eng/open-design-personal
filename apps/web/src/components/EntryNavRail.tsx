@@ -18,6 +18,7 @@ export type EntryView =
   | 'home'
   | 'onboarding'
   | 'projects'
+  | 'reels'
   | 'tasks'
   | 'plugins'
   | 'design-systems'
@@ -158,6 +159,15 @@ export function EntryNavRail({
           testId="entry-nav-projects"
         >
           <Icon name="folder" size={18} />
+        </NavButton>
+        <NavButton
+          active={view === 'reels'}
+          ariaLabel="Пост Instagram"
+          tooltip="Пост Instagram"
+          onClick={() => selectView('reels')}
+          testId="entry-nav-reels"
+        >
+          <Icon name="play" size={18} />
         </NavButton>
         <NavButton
           active={view === 'design-systems'}

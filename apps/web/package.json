@@ -44,6 +44,7 @@
     "dompurify": "3.4.2",
     "jspdf": "4.2.1",
     "lexical": "0.36.2",
+    "lottie-web": "^5.13.0",
     "lucide-react": "1.16.0",
     "micromark": "4.0.2",
     "micromark-extension-gfm": "3.0.0",

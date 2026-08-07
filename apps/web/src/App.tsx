@@ -1101,6 +1101,12 @@ function AppInner() {
         // stays actionable regardless of the active view.
         if (!next.onboardingCompleted) {
           navigate({ kind: 'home', view: 'onboarding' }, { replace: true });
+        } else if (window.location.pathname.startsWith('/onboarding')) {
+          // A window that was parked on /onboarding at its last shutdown
+          // reopens on the same route, so the welcome screen came back even
+          // with the flag set. Only the boot path corrects it — opening
+          // onboarding by hand from Settings must still work.
+          navigate({ kind: 'home', view: 'home' }, { replace: true });
         }
         setDaemonConfigLoaded(true);
         // Only a non-null GET payload means we actually observed daemon prefs.

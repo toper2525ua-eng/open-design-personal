@@ -99,6 +99,7 @@ import { DesignsTab } from './DesignsTab';
 import { DesignSystemsTab } from './DesignSystemsTab';
 import { BrandsTab } from './BrandsTab';
 import { EntryNavRail, type EntryView as EntryViewKind } from './EntryNavRail';
+import { ReelsView } from '../post-studio/ReelsView';
 import { LibrarySection } from './LibrarySection';
 import { UpdaterPopup } from './UpdaterPopup';
 import { WhatsNewPopup } from './WhatsNewPopup';
@@ -1255,6 +1256,28 @@ export function EntryShell({
                 onDesignSystemsRefresh={onDesignSystemsRefresh}
               />
             </div>
+            {view === 'reels' ? (
+              <ReelsView
+                projects={projects}
+                loading={projectsLoading}
+                onOpenProject={onOpenProject}
+                onCreate={() => {
+                  // Створюємо напряму, без модалки вибору типу: сюди
+                  // приходять робити рілс, тип уже відомий. kind:'video'
+                  // — це те, за чим ProjectView вмикає пост-режим.
+                  void Promise.resolve(
+                    onCreateProject({
+                      name: 'Новий ролик',
+                      skillId: null,
+                      designSystemId: null,
+                      metadata: { kind: 'video' },
+                    }),
+                  ).catch((err) => {
+                    console.warn('Failed to create reel project', err);
+                  });
+                }}
+              />
+            ) : null}
             {view === 'integrations' ? (
               <IntegrationsView
                 config={config}

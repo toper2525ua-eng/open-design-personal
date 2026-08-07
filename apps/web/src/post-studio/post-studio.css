@@ -1,0 +1,1407 @@
+/*
+ * Пост-режим: превʼю кадру по центру, блоки-кроки справа.
+ *
+ * Усе на токенах застосунку (tokens.css), тому режим сам стає темним
+ * разом з рештою UI — жодного захардкодженого кольору.
+ *
+ * Правка цього файлу в dev перезавантажує сторінку цілком, а не оновлює
+ * стилі на місці. Так задумано: причина й механізм — у коментарі біля
+ * import цього файлу в PostWorkspace.tsx.
+ */
+
+.post-ws {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-app);
+}
+
+.post-ws__bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+}
+
+.post-ws__title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-strong);
+  margin: 0;
+}
+
+.post-ws__meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.post-ws__spacer { flex: 1; }
+
+.post-ws__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  gap: 16px;
+  padding: 16px;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+}
+
+@media (max-width: 1100px) {
+  .post-ws__body { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* --- превʼю --- */
+
+.post-ws__stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.post-ws__frame {
+  position: relative;
+  aspect-ratio: 9 / 16;
+  width: 100%;
+  max-width: 300px;
+  border-radius: 14px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-muted);
+  overflow: hidden;
+}
+
+.post-ws__frame-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-soft);
+}
+
+/* Ведучий: нижні 45 % кадру, тінь обов'язкова — без неї на світлому
+   фоні фігура виглядає наклеєною. */
+/* Підлога займає нижні 42 % кадру — рівно до низу зони субтитрів.
+   Жодних transform: перспектива вже враховна в координатах ліній.
+   Висота задається в розмітці (FLOOR_H у PostWorkspace.tsx), бо з того
+   самого числа рахується viewBox сітки: розійдуться — клітинки
+   перестануть бути квадратними. */
+.post-ws__floor-wrap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+
+.post-ws__floor {
+  width: 100%;
+  height: 100%;
+  display: block;
+  /* mask-image задається в розмітці: смуга розтушовки прив'язана до того
+     ряду, на якому сітка реально обривається, а не до висоти коробки.
+     Захардкоджений відсоток тут лишав останній ряд напіввидимим. */
+}
+
+/* vector-effect тримає товщину лінії сталою попри розтягнутий viewBox:
+   без нього preserveAspectRatio="none" розчавив би горизонталі до
+   невидимості, а вертикалі лишив товстими.
+
+   Колір задається в розмітці, не тут: ряди беруть --floor-line напряму,
+   поздовжні — через градієнт прозорості. Правило `stroke` у CSS перебило
+   б обидва, бо CSS сильніший за атрибут презентації. */
+.post-ws__floor-lines line {
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Ведучий піднятий майже до середини кадру: знизу лишається смуга під
+   інтерфейс Instagram, а сам він важить у композиції більше, ніж коли
+   тулиться до нижнього краю. */
+/* Коробка ведучого, а не сам знімок: усередині живуть ДВА знімки —
+   стара поза й нова, поки триває зміна. Коробка на всю ширину кадру, а
+   знімок вписується в неї по висоті, тож центрування дає сама коробка.
+   Через це з анімацій пішов translateX(-50%), який доводилось повторювати
+   в кожному кадрі кожної з них: забути його в одному місці означало
+   зсунути фігуру вбік. */
+.post-ws__host {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* Опущений на дві клітинки від попередніх 4 %. Клітинка по вертикалі —
+     2.8125 % висоти, тож два кроки це 5.625 %, і низ фігури заходить під
+     лінію безпечної зони. Так ведучий стоїть на ній, а не висить над. */
+  bottom: -1.6%;
+  height: 52%;
+  pointer-events: none;
+  /* Обертання й масштаб — від ніг, а не від центру: фігура стоїть на
+     підлозі, тож нахил має бути маятником від опори. Навколо центру
+     замість цього їздять черевики, і персонаж виглядає підвішеним. */
+  transform-origin: 50% 100%;
+  /* Виїзд знизу один раз, далі — нескінченні похитування. Затримка
+     похитування дорівнює тривалості виїзду, щоб анімації не наклались.
+     Нахил окремим циклом і з іншим періодом: збіжні цикли дають
+     механічне гойдання, різні — дихання.
+
+     Нахил стартує ще на 0.35 с пізніше за похитування. Обидва цикли
+     починаються з нуля й з нульової швидкості, тож стик і так рівний, —
+     але рознесені старти прибирають відчуття, що в одну мить увімкнули
+     рубильник і фігура ожила вся одразу. */
+  animation:
+    post-ws-host-in 0.9s both,
+    post-ws-host-float 5.4s ease-in-out 0.9s infinite,
+    post-ws-host-tilt 4.1s ease-in-out 1.25s infinite;
+  will-change: transform, rotate;
+}
+
+/* Знімок пози. Тінь тримаємо в змінній, бо анімація зміни пози чіпає
+   filter цілком: список функцій має збігатись у всіх кадрах, інакше
+   браузер не зможе його інтерполювати і просто перестрибне. */
+.post-ws__host-shot {
+  --host-shadow: drop-shadow(0 12px 32px rgba(0, 0, 0, 0.18));
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: var(--host-shadow);
+  transform-origin: 50% 100%;
+}
+
+/*
+ * Зміна пози — стара йде у світло, потім заходить нова. 0.22 с на все.
+ *
+ * ЧОМУ ФІГУРА ТЕМНІЛА. Обидві пози несуть власну тінь
+ * (drop-shadow у --host-shadow). Поки вони були в кадрі одночасно, тінь
+ * НОВОЇ лягала просто на стару, а два темні контури один поверх одного
+ * додавали ще. Через це стара не танула, а бруднішала — рухалась у
+ * протилежний бік від тла.
+ *
+ * Тому тінь тепер гасне разом із фігурою, а самі пози розведені в часі:
+ * коли з'являється нова, старої вже немає.
+ *
+ * ЧОМУ САМЕ У СВІТЛО. Тло світле, і фігура має йти ДО нього, а не від
+ * нього: contrast зводить пікселі до одного тону, brightness виводить
+ * той тон угору. Темні ділянки (волосся, контури) при цьому світлішають
+ * разом з рештою — сама лише brightness їх не бере, вони лишаються
+ * темними плямами і читаються як бруд.
+ *
+ * ЧОМУ НЕ СУЦІЛЬНИЙ СИЛУЕТ. Раніше вибілювання йшло при повній
+ * непрозорості — виходила рівна пляма у формі людини, яка ЗАКРИВАЛА
+ * сітку підлоги. Тепер прозорість спадає РАЗОМ зі світлішанням: до
+ * миті, коли фігура стає плоскою, від неї лишається чверть, і крізь
+ * неї видно сітку.
+ */
+@keyframes post-ws-host-out {
+  0% {
+    opacity: 1;
+    filter: contrast(1) brightness(1) drop-shadow(0 12px 32px rgba(0, 0, 0, 0.18));
+  }
+  26% {
+    opacity: 0.5;
+    filter: contrast(0.45) brightness(1.5) drop-shadow(0 12px 32px rgba(0, 0, 0, 0.04));
+  }
+  48% {
+    opacity: 0;
+    filter: contrast(0) brightness(2) drop-shadow(0 12px 32px rgba(0, 0, 0, 0));
+  }
+  100% {
+    opacity: 0;
+    filter: contrast(0) brightness(2) drop-shadow(0 12px 32px rgba(0, 0, 0, 0));
+  }
+}
+
+/* Нова чекає, поки старої не стане, і аж тоді заходить. Позначка 48 % —
+   та сама, на якій стара доходить до нуля: у мить появи нової
+   попередньої в кадрі вже немає жодного відсотка. */
+@keyframes post-ws-host-swap-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.99);
+  }
+  48% {
+    opacity: 0;
+  }
+  72% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.post-ws__host-shot.is-out {
+  animation: post-ws-host-out 0.22s ease-out both;
+  will-change: opacity, filter;
+}
+
+.post-ws__host-shot.is-swap {
+  animation: post-ws-host-swap-in 0.22s ease-out both;
+  will-change: transform, opacity;
+}
+
+/*
+ * Виїзд пострілом із розкачкою.
+ *
+ * Було: рівний під'їзд знизу з ease-out. Рух є, життя немає — читається
+ * як в'їзд на ліфті, бо фігура гальмує рівно в точці і завмирає.
+ *
+ * БЕЗ ДЕФОРМАЦІЇ. Масштаб не чіпаємо взагалі — жодних scaleX/scaleY.
+ * Squash-and-stretch тут пробували: живий персонаж від нього гумовіє,
+ * і на обличчі це видно одразу. Різкість дає крива розгону, а не
+ * розтяг тіла.
+ *
+ * СТЕЛЯ ПІДЙОМУ. Ведучий обрізаний по пояс, і низ картинки ховається за
+ * нижнім краєм кадру: bottom -1.6 % висоти кадру при висоті фігури 52 %.
+ * Тобто запас на підйом — 1.6/52 = 3.08 % власної висоти; вище з-під
+ * фігури визирає зріз. Беремо 1.2 %, менш ніж половину запасу: замах
+ * має бути помітний, а не стрибучий.
+ *
+ * Затухання 1.2 → 0.45 → 0.17 → 0.06 → 0. Кожен наступний замах менший
+ * за попередній — це пружина, а не тремор.
+ *
+ * ТІЛЬКИ ВГОРУ. Нахилу тут немає навмисно: виїзд — це рух по одній осі.
+ * Хитання вбік на зльоті читається як занос, а не як поява, і на
+ * вирізаній фігурі одразу видно, що вона пласка. Нахил вмикається потім,
+ * окремим циклом, коли фігура вже стоїть.
+ *
+ * Горизонталі в кадрах немає: коробка ведучого сама на всю ширину, тож
+ * центрування не залежить від transform і його неможливо загубити,
+ * забувши повторити в черговому кадрі.
+ */
+@keyframes post-ws-host-in {
+  0% {
+    transform: translateY(58%);
+    opacity: 0;
+    /* Постріл: майже вся швидкість у перші миті. */
+    animation-timing-function: cubic-bezier(0.12, 0.82, 0.28, 1);
+  }
+  10% {
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.12, 0.82, 0.28, 1);
+  }
+  26% {
+    transform: translateY(-1.2%);
+    opacity: 1;
+    animation-timing-function: ease-in-out;
+  }
+  45% {
+    transform: translateY(0.45%);
+    animation-timing-function: ease-in-out;
+  }
+  63% {
+    transform: translateY(-0.17%);
+    animation-timing-function: ease-in-out;
+  }
+  80% {
+    transform: translateY(0.06%);
+    animation-timing-function: ease-in-out;
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+/* Похитування. Амплітуда мала й період довгий — фігура має «дихати», а
+   не гойдатись: помітний рух відтягує увагу від субтитрів. */
+@keyframes post-ws-host-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1.1%);
+  }
+}
+
+/* Нахил між змінами поз. Період 4.1 с проти 5.4 с у похитування — вони
+   розходяться і сходяться довго, тому рух не читається як цикл.
+
+   Цикл ПОЧИНАЄТЬСЯ І ЗАКІНЧУЄТЬСЯ на нулі, а крайні положення стоять на
+   чвертях. Було 0 % → -0.7°, і в мить старту фігуру кидало на 0.7° за
+   один кадр — саме той ривок, після якого вирізаний персонаж виглядав
+   так, ніби телепортувався. Тепер нахил починається з того самого нуля,
+   на якому завершився виїзд, і з нульової швидкості: ease-in-out на
+   першій чверті виводить його з місця плавно.
+
+   Половина циклу (25 % → 75 %) — один суцільний прохід через нуль, тож
+   середину фігура минає на найбільшій швидкості, як справжній маятник,
+   а не завмирає в ній. */
+@keyframes post-ws-host-tilt {
+  0%,
+  100% {
+    rotate: 0deg;
+  }
+  25% {
+    rotate: 0.7deg;
+  }
+  75% {
+    rotate: -0.7deg;
+  }
+}
+
+/* Світло від підлоги: біля нижнього краю майже біле, догори тане в тло.
+   Дає відчуття, що сцена освітлена спереду, і відриває ведучого від
+   рівної заливки. */
+.post-ws__floor-glow {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* Нижче зони субтитрів (вона починається на 42 % знизу): градієнт
+     має гасити ноги ведучого, а не наповзати на текст. */
+  height: 30%;
+  background: linear-gradient(to top, #ffffff 0%, rgba(255, 255, 255, 0.82) 18%, rgba(255, 255, 255, 0) 100%);
+  pointer-events: none;
+}
+
+/* --- картка в кадрі --- */
+
+/* Та сама верхня смуга, що й у стікерів. Висота вільна: скільки картка
+   намалювала, стільки й займає — обрізати чуже нам нема за чим. */
+.post-ws__card {
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  animation: post-ws-card-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Вміст малюється під полотно 1080 px і стискається множником, який
+   рахує розмітка з реальної ширини превʼю. transform-origin угорі —
+   картка росте вниз від своєї межі, а не від центру. */
+.post-ws__card-in {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 1080px;
+  transform-origin: top center;
+}
+
+@keyframes post-ws-card-in {
+  from {
+    opacity: 0;
+    translate: 0 -14px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+/* Договір про появу рядків: студія лише вішає is-shown по черзі, а як
+   виглядає закритий і відкритий стан — вирішує CSS самої картки.
+
+   Свого запасного правила тут навмисно НЕМАЄ. Було: `[data-reveal]
+   { opacity: 0 }` на випадок, якщо агент про стан не подбав. Але цим
+   студія бере на себе вигляд, а не час — рівно те, від чого ми пішли.
+   Гірше: коли навішування класу дало збій, саме це правило перетворило
+   картку на порожню коробку. Без нього збій виглядав би як «рядки
+   зʼявились усі одразу» — помітно, але не смертельно. */
+
+/* --- стікер у кадрі --- */
+
+/* Верхня третина зі зсувом убік. По центру стікер став би прямо над
+   субтитрами й тягнув би погляд на себе саме тоді, коли треба читати.
+   Квадрат: усі стікери мальовані у viewBox 400×400, тож коробка під них
+   однакова, і сусідні кадри не «стрибають» розміром.
+   Вихід — на обгортці, поява й дрейф — усередині: інакше нескінченна
+   анімація дрейфу перебивала б transition зникнення. */
+.post-ws__sticker {
+  position: absolute;
+  aspect-ratio: 1;
+  pointer-events: none;
+  /* left і width анімуються навмисно: коли поруч стає наступний стікер,
+     попередні РОЗʼЇЖДЖАЮТЬСЯ, звільняючи місце, а не стрибають у нову
+     позицію. Саме цей рух і читається як «кадр добудовується», а не як
+     підміна картинок. */
+  transition:
+    left 0.68s cubic-bezier(0.33, 1.3, 0.5, 1),
+    width 0.42s cubic-bezier(0.33, 1.3, 0.5, 1) 0.4s,
+    top 0.42s cubic-bezier(0.33, 1.3, 0.5, 1) 0.4s,
+    opacity 0.15s ease-in;
+  /* Вхід, удар на акцентному слові і стиск на виході — усе числами з
+     кадру, а не переходом: перехід памʼятає, звідки їхав, і при
+     перемотці показував би не те, що на цій секунді насправді. Тому
+     transform свідомо ВИНЯТИЙ зі списку переходів вище. */
+  transform: translateX(var(--enter-x, 0)) scale(calc((1 + var(--punch, 0)) * var(--enter-scale, 1)));
+}
+
+.post-ws__sticker.is-out {
+  opacity: 0;
+}
+
+.post-ws__sticker-in {
+  width: 100%;
+  height: 100%;
+  /* Кут, тривалість і фазу дрейфу задає розмітка — свої в кожного
+     стікера. Спільні числа читались як одна намальована картинка, що
+     гойдається цілком. Фаза відʼємна, тож навіть два стікери, які
+     зʼявились одночасно, застають цикл у різних місцях. */
+  --sticker-tilt: 1.5deg;
+  --drift-dur: 4.2s;
+  --drift-delay: 0s;
+  /* Обертання й зсув від центру фігури: інакше нахил веде верх, а низ
+     стоїть, і предмет читається як приклеєний за ноги. */
+  transform-origin: 50% 50%;
+  /* Поява переїхала в кадр числом (stickerEnter): CSS-анімація вміла
+     рівно один вхід на всіх — ані стати одразу, ані приїхати збоку.
+     Тут лишився тільки дрейф. */
+  animation:
+    post-ws-sticker-drift var(--drift-dur) ease-in-out calc(0.22s + var(--drift-delay))
+      infinite alternate;
+  will-change: transform, opacity;
+}
+
+.post-ws__sticker-breathe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* Швидше за нахил і без спільного дільника з ним: два незбіжні цикли
+     дають живу картинку, один спільний — механічний метроном. */
+  animation: post-ws-sticker-breathe 1.05s ease-in-out var(--drift-delay) infinite alternate;
+  will-change: transform;
+}
+
+.post-ws__sticker-in img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* Бейдж — коротка плашка над стікером: «−10 хв», «×3».
+   Червоний за замовчуванням: бейдж майже завжди говорить про втрату або
+   помилку. Синій — коли це просто подія.
+
+   Білий кант і тінь обовʼязкові: без них плашка тоне у світлому тлі так
+   само, як тонули б стікери без свого кільця. */
+.post-ws__badge {
+  position: absolute;
+  padding: 0.3em 0.75em;
+  border-radius: 999px;
+  background: #ff3b30;
+  color: #fff;
+  font-family: Arial, sans-serif;
+  font-weight: 700;
+  font-size: clamp(7px, 3.4cqw, 13px);
+  line-height: 1.2;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(17, 17, 17, 0.22);
+  transform-origin: 50% 100%;
+  pointer-events: none;
+}
+
+.post-ws__badge.is-info {
+  background: #0a84ff;
+  box-shadow: 0 2px 8px rgba(10, 132, 255, 0.3);
+}
+
+/* Lottie сам малює svg усередину; коробка лишається тією самою, що й у
+   растрового стікера, тож розкладка не знає різниці між ними. */
+.post-ws__sticker-lottie {
+  width: 100%;
+  height: 100%;
+}
+
+.post-ws__sticker-lottie svg {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* Пігулка під стікером — не підпис, а ПРИСВОЄННЯ: «ти», «твій сайт»,
+   «200 файлів». Вона перетворює намальований предмет на предмет
+   глядача, і саме в цьому її робота, а не в поясненні картинки.
+
+   Синя, а не темна: жовтий у кадрі вже зайнятий акцентом субтитра, а
+   чорна капсула читається як службова плашка й зливається з текстом.
+   Синій не трапляється більше ніде в кадрі, тому око бачить у ньому
+   окремий голос. */
+.post-ws__sticker-label {
+  position: absolute;
+  transition:
+    left 0.68s cubic-bezier(0.33, 1.3, 0.5, 1),
+    top 0.42s cubic-bezier(0.33, 1.3, 0.5, 1) 0.4s;
+  /* Місце задає кадр, не стікер: пігулка стоїть під картинкою, але поза
+     її системою координат, тому дрейф і удар на неї не діють. */
+  margin-top: 0.5em;
+  padding: 0.34em 1em;
+  border-radius: 999px;
+  /* Без канта: він потрібен предметам, які тонуть у світлому тлі, а
+     насичений синій і так тримається сам. Зайве кільце тут робить із
+     твердження ще одну наліпку. */
+  background: #0a84ff;
+  color: #fff;
+  font-family: Arial, sans-serif;
+  font-weight: 700;
+  /* Від ширини кадру, як субтитри, але дрібніше: пігулка договорює
+     стікер, а не сперечається з рядком за увагу. */
+  font-size: clamp(8px, 3.8cqw, 15px);
+  line-height: 1.25;
+  white-space: nowrap;
+  /* Тінь кольору самої пігулки, не сіра: сіра під насиченим синім
+     читається як брудна облямівка. */
+  box-shadow: 0 3px 10px rgba(10, 132, 255, 0.35);
+  transform-origin: 50% 0;
+  pointer-events: none;
+}
+
+/* Перельот обов'язковий: лінійна поява виглядає мертво. Перелом на 68 %
+   від 220 мс — це ті самі 150 мс до 1.06 і 70 мс на осідання, що й у
+   збірці композиції для рендера. */
+@keyframes post-ws-sticker-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  68% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Поки стікер висить — повільний дрейф. Абсолютно статичний елемент у
+   кадрі читається як зависла картинка. */
+/* Дрейф ходить і вбік, не лише вгору-вниз: вертикальне коливання само по
+   собі читається як здригання на місці, а рух по горизонталі — як живий
+   предмет, що плаває. Крайні кадри розведені (уліво-вниз → управо-вгору),
+   тож шлях виходить дугою, а не відрізком. */
+@keyframes post-ws-sticker-drift {
+  from { transform: rotate(calc(var(--sticker-tilt) * -2)); }
+  to { transform: rotate(calc(var(--sticker-tilt) * 2)); }
+}
+
+/* Дихання — окремим циклом і швидшим за нахил. Два незбіжні періоди
+   дають живу картинку; один спільний читається як механічний метроном. */
+@keyframes post-ws-sticker-breathe {
+  from { transform: scale(0.945); }
+  to { transform: scale(1.055); }
+}
+
+/* Стікер призначено, але файлу ще немає. Пунктир — службова позначка
+   студії, у рендер вона не потрапляє. */
+.post-ws__sticker-gap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border: 1px dashed rgba(17, 17, 17, 0.35);
+  border-radius: 10px;
+  color: rgba(17, 17, 17, 0.45);
+  font-size: 9px;
+  text-align: center;
+  padding: 4px;
+  overflow: hidden;
+}
+
+/* Субтитри строго по центру вертикалі: зона 38–62 % висоти. */
+.post-ws__caption {
+  position: absolute;
+  /* Три клітинки сітки з кожного боку. Клітинка — 5 % ширини, тож поле
+     завжди 15 %: рядок починається з однієї й тієї ж вертикалі, хоч би
+     скільки слів у групі. Пікселі тут не годяться — вони не збігаються
+     з сіткою і край «плаває» від кадру до кадру.
+     Двох клітинок було мало: довге слово («МАЛЕНЬКИМИ», «ПЕРЕЙМЕНУВАТИ»)
+     розпирало рядок майже до країв, і поле зникало візуально. */
+  left: 15%;
+  right: 15%;
+  /* Рівно по центру кадру: 42–58 % — це смуга, симетрична відносно
+     середини, куди око падає першим при скролі. */
+  top: 42%;
+  height: 16%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-family: 'Arial Black', Arial, sans-serif;
+  /* Рахується від ширини кадру, а не від вікна: рядок із трьох слів має
+     влазити між полями, не переносячись. 5.4cqw підібрано під найдовше
+     реальне слово сценарію — «ПЕРЕЙМЕНУВАТИ» лишає запас з обох боків. */
+  font-size: clamp(11px, 5.4cqw, 21px);
+  line-height: 1.15;
+  color: #111;
+  pointer-events: none;
+}
+
+/* Нижні 12 % з'їдає інтерфейс Instagram — у превʼю показуємо межу,
+   щоб не ставити туди нічого важливого. */
+/* Смуга під інтерфейс Instagram. Межу не малюємо: пунктир перетинав
+   ведучого рівно по грудях і читався як частина кадру, а не як
+   службова підказка. Зона далі враховується в розкладці — просто
+   невидима. */
+.post-ws__safe {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 12%;
+  pointer-events: none;
+}
+
+.post-ws__scrub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 300px;
+}
+
+.post-ws__scrub input[type='range'] { flex: 1; }
+
+/* Своя кнопка замість рідних controls: ті тягнули за собою власний
+   таймер у часі медіа, який на пришвидшенні суперечив нашому. */
+.post-ws__play {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 50%;
+  background: var(--bg-subtle);
+  color: var(--text-strong);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.post-ws__play:hover { border-color: var(--border-strong); }
+
+.post-ws__time {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  justify-content: flex-end;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 62px;
+  text-align: right;
+}
+
+/* Множник поруч із часом: інакше «0:25» без пояснення виглядає як
+   помилка — доріжка ж на 0:51. */
+.post-ws__rate {
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--bg-fill-secondary);
+  color: var(--text-strong);
+  font-size: 10px;
+}
+
+/* --- блоки --- */
+
+.post-ws__blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.post-block {
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--bg-panel);
+  padding: 12px 14px;
+}
+
+.post-block.is-active {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+}
+
+.post-block__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.post-block__num {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--bg-fill-tertiary);
+  color: var(--text-muted);
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.post-block.is-done .post-block__num {
+  background: var(--bg-fill-secondary);
+  color: var(--text-strong);
+}
+
+.post-block__title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-strong);
+}
+
+.post-block__note {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.post-block__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.post-block__pick {
+  border: 1px solid var(--border-soft);
+  background: var(--bg-subtle);
+  border-radius: 8px;
+  padding: 5px 9px;
+  font-size: 12px;
+  color: var(--text-strong);
+  cursor: pointer;
+  text-align: left;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.post-block__pick:hover { border-color: var(--border-strong); }
+.post-block__pick.is-on { border-color: var(--border-strong); background: var(--bg-muted); }
+
+.post-block__script {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  color: var(--text-strong);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.post-block__script:focus {
+  outline: none;
+  border-color: var(--border-strong);
+}
+
+.post-block__poses {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(46px, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+  /* Приблизно чотири ряди. Далі — прокрутка: набір поз росте з кожним
+     роликом, і без стелі блок витісняв би з екрана решту кроків. */
+  max-height: 232px;
+  overflow-y: auto;
+}
+
+.post-block__pose {
+  aspect-ratio: 1;
+  border-radius: 8px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-subtle);
+  padding: 2px;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.post-block__pose { position: relative; }
+.post-block__pose.is-on { border-color: var(--border-strong); background: var(--bg-muted); }
+.post-block__pose img { width: 100%; height: 100%; object-fit: contain; }
+
+/* Поза, що розійшлася з еталоном: інше обличчя в кадрі помітно одразу,
+   тому попереджаємо ще до вибору. */
+.post-block__pose.is-drifted { border-color: #d08a3a; }
+
+.post-block__pose-warn {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #d08a3a;
+  color: #fff;
+  font-size: 9px;
+  line-height: 12px;
+  text-align: center;
+}
+
+/* --- стікери в панелі --- */
+
+/* Стрічка в порядку появи, а не сітка: у стікерів головне — коли вони
+   в кадрі, і сусідство двох підряд видно одразу за підписами часу. */
+.post-block__stickers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.post-block__sticker {
+  position: relative;
+  width: 54px;
+  height: 54px;
+  border-radius: 8px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-subtle);
+  padding: 2px;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.post-block__sticker:hover { border-color: var(--border-strong); }
+.post-block__sticker.is-on { border-color: var(--border-strong); background: var(--bg-muted); }
+.post-block__sticker img { width: 100%; height: 100%; object-fit: contain; }
+
+/* Прив'язка є, файлу немає. Пунктир, а не порожня плитка: інакше
+   пропуск виглядає як звичайний стікер, який просто не завантажився. */
+.post-block__sticker.is-missing { border-style: dashed; }
+
+.post-block__sticker-gap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-soft);
+  font-size: 16px;
+}
+
+/* --- бібліотека за розділами --- */
+
+.post-block__kind { margin-top: 10px; }
+
+.post-block__kind-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.post-block__kind-head span {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-soft);
+}
+
+.post-block__kind-hint {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text-soft);
+  margin: 2px 0 6px;
+}
+
+/* Заявка — рядок без картинки: показуємо бриф, бо саме він піде в
+   генерацію, і саме його правлять, коли результат вийшов не той. */
+.post-block__want {
+  display: grid;
+  gap: 2px;
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+}
+
+.post-block__want b { font-size: 11px; }
+.post-block__want span { font-size: 10px; color: var(--text-soft); }
+.post-block__want i { font-size: 10px; line-height: 1.35; color: var(--text-muted); }
+
+/* --- список речень --- */
+
+.post-block__scenes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.post-block__scene {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 2px 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  text-align: start;
+  cursor: pointer;
+}
+
+.post-block__scene:hover { border-color: var(--border-strong); }
+.post-block__scene.is-on { border-color: var(--border-strong); background: var(--bg-muted); }
+
+/* Продовження попередньої думки — зсув, а не колір: у списку одразу
+   видно, де починається нова тема, а де кадр лише добудовується. */
+.post-block__scene.is-cont { margin-inline-start: 14px; }
+
+.post-block__scene-at {
+  grid-row: span 2;
+  color: var(--text-soft);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  padding-top: 2px;
+}
+
+.post-block__scene-text {
+  font-size: 12px;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.post-block__scene-meta {
+  font-size: 10px;
+  color: var(--text-soft);
+}
+
+.post-block__scene-meta i { opacity: 0.7; }
+
+/* Час появи прямо на плитці: без нього неможливо побачити, що два
+   стікери стоять надто близько один до одного. */
+.post-block__sticker-at {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  padding: 1px 0;
+  background: var(--bg-panel);
+  color: var(--text-soft);
+  font-size: 9px;
+  line-height: 1.2;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Превʼю субтитра до вирівнювання: показує розмір і місце в кадрі,
+   але напівпрозоре — щоб не сплутати з реальним словом на доріжці. */
+.post-ws__caption.is-preview {
+  opacity: 0.35;
+}
+
+/* Рядок субтитра: слова в один потік із проміжками. Перенесення
+   заборонене — група й так підібрана так, щоб влізти. */
+.post-ws__caption-line {
+  display: inline-flex;
+  gap: 0.32em;
+  white-space: nowrap;
+  align-items: baseline;
+}
+
+/* Невимовлене слово вже займає своє місце, але невидиме: так рядок
+   стоїть на місці, а слова проявляються зліва направо, ніби їх
+   друкують. Якби вони просто додавались, центр зміщувався б після
+   кожного, і текст стрибав би в кадрі. */
+.post-ws__caption-word {
+  opacity: 0;
+  display: inline-block;
+  /* Власний шар рендеру: масштаб рахується по вектору гліфів, а не
+     розтягує готовий растр. Без цього товщина штрихів на жирному
+     шрифті помітно пливе під час появи. */
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+
+/* Поява: напівпрозоре й дрібніше → повністю видиме з перельотом
+   масштабу → осідає на 100 %.
+
+   Анімуємо transform, а не font-size. Кегль впливає на розкладку:
+   ширина слова змінюється на кожному кадрі, сусіди роз’їжджаються, і
+   весь рядок трясе. Transform же працює поза потоком — розміри для
+   layout лишаються сталими, рухається тільки картинка.
+
+   Щоб штрихи Arial Black при цьому не «дихали» вагою, слово виноситься
+   на власний шар (will-change) — там масштабування йде по вектору, а
+   не по вже готовому растру. */
+@keyframes post-ws-caption-pop {
+  0% {
+    opacity: 0.5;
+    transform: scale(0.92);
+  }
+  55% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.post-ws__caption-word.is-said {
+  opacity: 1;
+  animation: post-ws-caption-pop 0.2s ease-out both;
+}
+
+/* Ключове слово фрази. Шрифт той самий — міняється лише підкладка,
+   інакше акцент читався б як інший стиль, а не як виділення. Легкий
+   нахил додає плашці рукописності: рівний прямокутник виглядає як
+   службова позначка. */
+.post-ws__caption-word.is-accent {
+  background: #ffe500;
+  border-radius: 6px;
+  padding: 0.06em 0.26em;
+  transform-origin: center;
+  /* Нахил окремою властивістю, не через transform: анімація появи
+     чіпає саме transform, і поворот у ній би загубився. */
+  rotate: -1.6deg;
+  /* Плашка світиться рівно поки слово звучить. Тінь, а не масштаб:
+     масштаб зайнятий появою, а розігнати плашку вшир означало б
+     посунути сусідів у рядку. */
+  box-shadow: 0 0 calc(var(--glow, 0) * 0.5em) rgba(255, 229, 0, calc(var(--glow, 0) * 0.6));
+}
+
+/* Вага слова під голос — правило `asr-keyword-glow`.
+   Поки слово вимовляється, воно набирає розмір і тінь; після — осідає,
+   але НЕ в нуль: у рядку лишається слід щойно сказаного. Саме цей слід
+   і читається як мова, а не як текст, де світиться одне слово.
+
+   Окремий вкладений елемент, бо зовнішній вже несе появу і плашку —
+   обидва чіпають transform, і в одному елементі поява затирала б
+   наголос. */
+.post-ws__caption-ink {
+  display: inline-block;
+  transform: scale(calc(1 + 0.05 * var(--glow, 0)));
+  text-shadow: 0 calc(var(--glow, 0) * 0.02em) calc(var(--glow, 0) * 0.24em)
+    rgba(17, 17, 17, calc(var(--glow, 0) * 0.3));
+}
+
+/* Стрічка транскрипції під плеєром. Обмежена по висоті: на довгому
+   ролику вона інакше витісняє все інше з екрана. */
+.post-ws__words {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-width: 460px;
+  max-height: 132px;
+  overflow-y: auto;
+  margin-top: 10px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+}
+
+.post-ws__word {
+  padding: 1px 5px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.post-ws__word:hover {
+  background: var(--bg-muted);
+  color: var(--text-base);
+}
+
+/* Акцентне слово — те, що в кадрі піде на жовтій плашці. У стрічці
+   показуємо його приглушеним жовтим: видно розкладку акцентів по
+   всьому тексту ще до відтворення, але воно не сперечається з
+   підсвіткою поточного слова. */
+.post-ws__word.is-accent {
+  background: rgba(255, 229, 0, 0.32);
+  color: var(--text-base);
+}
+
+/* Слово зі стікером. Крапка знизу, а не колір тла: слово вже може бути
+   акцентним або поточним, і третій фон перетворив би стрічку на кашу. */
+.post-ws__word.has-sticker { position: relative; }
+
+.post-ws__word.has-sticker::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 4px;
+  height: 4px;
+  margin-inline-start: -2px;
+  border-radius: 50%;
+  background: var(--text-soft);
+}
+
+/* Слово, що звучить зараз. Колір, а не лише жирність: на швидкій мові
+   зміна ваги шрифту зливається в мерехтіння. Йде після .is-accent, щоб
+   на акцентному слові виграв яскравий жовтий. */
+.post-ws__word.is-on,
+.post-ws__word.is-accent.is-on {
+  background: #ffe500;
+  color: #111;
+  font-weight: 700;
+}
+
+/* --- блок-шторка --- */
+
+/* Анімуємо grid-template-rows 0fr → 1fr, а не max-height: висота вмісту
+   заздалегідь невідома (сітка поз росте, текстове поле теж), і будь-яке
+   вгадане max-height або обрізає, або дає ривок наприкінці. */
+.post-block__body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.22s ease, opacity 0.18s ease;
+  opacity: 0;
+}
+
+.post-block__body-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.post-block.is-open .post-block__body {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.post-block__toggle {
+  margin-inline-start: 6px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.post-block__toggle:hover {
+  background: var(--bg-muted);
+  color: var(--text-base);
+}
+
+.post-block__chev {
+  display: inline-block;
+  font-size: 14px;
+  transition: transform 0.22s ease;
+}
+
+.post-block.is-open .post-block__chev {
+  transform: rotate(180deg);
+}
+
+/* Закріплений блок лишається розкритим, коли курсор пішов. Тонка
+   позначка збоку, щоб було видно, чому він не згортається. */
+.post-block.is-pinned {
+  border-inline-start: 2px solid var(--border-strong);
+}
+
+/* Дії в шапці показуємо лише в розкритому блоці: у згорнутому вони
+   тиснуться до заголовка й перетворюють список кроків на кашу. */
+.post-block__head-actions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+
+.post-block.is-open .post-block__head-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Дії в шапці блоку — праворуч, щоб не плутатись зі списком файлів
+   нижче: там вибір, тут керування. */
+.post-block__head-actions {
+  margin-inline-start: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.post-block__icon {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.post-block__icon:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text-base);
+}
+
+.post-block__icon:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Значення, а не дія: живе поза .post-block__head-actions, бо ті
+   ховаються на згорнутому блоці, а множник має бути видно саме
+   згорнутим. margin-inline-start: auto відсуває його праворуч замість
+   них. */
+.post-block__badge {
+  margin-inline-start: auto;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--bg-fill-secondary);
+  color: var(--text-strong);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.post-block__icon.is-danger {
+  border-color: #c0563a;
+  color: #c0563a;
+}
+
+/* Еталон: від нього генеруються решта поз, тому він має бути видимий
+   у сітці без наведення. */
+.post-block__pose-ref {
+  position: absolute;
+  bottom: 2px;
+  left: 3px;
+  font-size: 10px;
+  line-height: 1;
+  color: #c9a227;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+}
+
+.post-ws__hint {
+  font-size: 12px;
+  color: var(--text-soft);
+  line-height: 1.5;
+}
+
+/* --- перегляд пози --- */
+
+.post-ws__preview {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.post-ws__preview-box {
+  max-width: min(760px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-base, #fff);
+}
+
+/* Поза й еталон поруч — порівняння облич і є сенсом цього вікна. */
+.post-ws__preview-shots {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.post-ws__preview-shot {
+  margin: 0;
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+}
+
+.post-ws__preview-shot img {
+  width: 100%;
+  max-height: 46vh;
+  object-fit: contain;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+}
+
+.post-ws__preview-shot figcaption {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.post-ws__preview-use {
+  margin-top: 12px;
+  font-size: 13px;
+  text-align: center;
+}
+
+/* Видалення пози незворотне — колір має відрізняти її від решти дій,
+   які лише формують запит до Клода. */
+.post-block__pick.is-danger {
+  border-color: #c0563a;
+  color: #c0563a;
+}
+
+.post-ws__preview-warn {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #d08a3a;
+  color: #d08a3a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* --- список роликів --- */
+
+.reels-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.reels-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--bg-panel);
+  cursor: pointer;
+  text-align: left;
+}
+
+.reels-card:hover { border-color: var(--border-strong); }
+
+.reels-card__frame {
+  aspect-ratio: 9 / 16;
+  border-radius: 8px;
+  background: var(--bg-muted);
+  border: 1px solid var(--border-soft);
+}
+
+.reels-card__name {
+  font-size: 13px;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
