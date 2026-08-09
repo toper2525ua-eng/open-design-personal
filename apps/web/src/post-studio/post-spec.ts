@@ -227,7 +227,7 @@ export interface Beat {
  * Тому час береться з `words[word].start`, тобто з того самого джерела,
  * що й субтитри. Вирівнювати руками нема чого.
  */
-export type StickerEnter = 'instant' | 'pop' | 'from-right' | 'from-left';
+export type StickerEnter = 'instant' | 'pop' | 'from-right' | 'from-left' | 'from-bottom';
 
 /**
  * Бейдж — коротка плашка над стікером: «−10 хв», «×3», «{}».
@@ -240,8 +240,14 @@ export interface StickerBadge {
   text: string;
   /** Індекс слова, на якому вилітає. Час — з того самого джерела. */
   at: number;
-  /** `warn` — червоний (втрата, помилка) · `info` — синій (подія). */
-  tone?: 'warn' | 'info';
+  /**
+   * `warn` — червоний (втрата, помилка) · `info` — синій (подія) ·
+   * `ok` — зелений (вийшло, дозвіл, схвалення).
+   *
+   * Зелений навмисно рідкісний: коли ним помічене все підряд, він
+   * перестає означати «вийшло».
+   */
+  tone?: 'warn' | 'info' | 'ok';
 }
 
 export interface Sticker {
@@ -300,6 +306,13 @@ export interface Sticker {
    * нормальний стан, а не незаповнене поле.
    */
   label?: string;
+  /**
+   * Синя пігулка ПРИСВОЮЄ предмет глядачеві («ти», «твій сайт»), червона
+   * його ТАВРУЄ («завелика», «складні промпти»). Це два різні
+   * висловлювання, і колір тут несе сенс, а не оформлення: синім
+   * помічене — твоє, червоним — те, що заважає.
+   */
+  labelTone?: 'own' | 'warn';
 }
 
 /**
@@ -381,7 +394,34 @@ export function cardAt(
 export const STICKER_MAX_LIVE = 5;
 
 /** Скільки триває згасання наприкінці власного відрізка стікера. */
-export const STICKER_EXIT_LEAD_S = 0.15;
+export const STICKER_EXIT_LEAD_S = 0.4;
+
+/**
+ * Вихід картки й стікера — так само чиста функція часу, як і вхід.
+ *
+ * Раніше картка просто зникала разом зі своїм інтервалом, а стікер
+ * гаснув за 0.15 с. У кадрі це читалось як склейка: одне щезло, друге
+ * стало. Тепер попереднє встигає піти рухом — опуститись і стиснутись, —
+ * і око встигає за переходом.
+ */
+export const CARD_IN_S = 0.42;
+export const CARD_OUT_S = 0.4;
+
+export function cardMotion(
+  age: number,
+  hold: number,
+): { y: number; scale: number; opacity: number } {
+  const left = hold - age;
+  if (left <= CARD_OUT_S) {
+    const q = smooth(Math.min(Math.max(1 - left / CARD_OUT_S, 0), 1));
+    return { y: -3 * q, scale: 1 - 0.05 * q, opacity: 1 - q };
+  }
+  const p = Math.min(Math.max(age / CARD_IN_S, 0), 1);
+  const e = easeOut(p);
+  // Без проявлення: коробка приїжджає знизу вже щільною. Напівпрозора
+  // картка читається як недомальована, а не як така, що приходить.
+  return { y: 7 * (1 - e), scale: 0.94 + 0.06 * e, opacity: 1 };
+}
 
 /**
  * Розкладка стікерів у часі: абсолютні межі з `word` і `hold`.
@@ -520,7 +560,10 @@ export function stickerLayout(
   // Що більше предметів, то дрібніший кожен. Один предмет це подія, троє
   // це схема: схему око охоплює цілком, тому її частини мають бути
   // меншими за самотній предмет, інакше кадр розпирає.
-  const SHRINK = [1, 1, 0.8, 0.66, 0.58, 0.52];
+  // Одиночний навмисно більший за максимум пари: сам у кадрі предмет
+  // має важити, і розмір у нього завжди той самий, скільки б разів
+  // він не зʼявлявся сам.
+  const SHRINK = [1, 1.12, 0.8, 0.66, 0.58, 0.52];
 
   /**
    * Розмір беремо з ПІКОВОЇ кількості сусідів за все життя стікера, а не
@@ -669,10 +712,10 @@ export const ENTER_S = 0.68;
 export function stickerEnter(
   kind: StickerEnter | undefined,
   age: number,
-): { x: number; scale: number; opacity: number } {
+): { x: number; y: number; scale: number; opacity: number } {
   const k = kind ?? 'pop';
   // Стоїть із першого кадру: жодного зростання, жодного проявлення.
-  if (k === 'instant') return { x: 0, scale: 1, opacity: 1 };
+  if (k === 'instant') return { x: 0, y: 0, scale: 1, opacity: 1 };
   const p = Math.min(Math.max(age / ENTER_S, 0), 1);
   if (k === 'from-right' || k === 'from-left') {
     const dir = k === 'from-right' ? 1 : -1;
@@ -681,17 +724,30 @@ export function stickerEnter(
     const x = p < 0.62
       ? dir * (2.2 - 2.42 * easeOut(p / 0.62))
       : dir * (-0.22 + 0.22 * smooth((p - 0.62) / 0.38));
-    return { x, scale: 1, opacity: 1 };
+    return { x, y: 0, scale: 1, opacity: 1 };
+  }
+  if (k === 'from-bottom') {
+    // Підйом із-під нижнього краю зони, з тим самим проскоком, що й у
+    // бічного входу. Для людини це природніший вхід за виростання на
+    // місці: фігура приходить у кадр, а не проявляється в ньому.
+    const y = p < 0.62
+      ? 1.6 - 1.78 * easeOut(p / 0.62)
+      : -0.18 + 0.18 * smooth((p - 0.62) / 0.38);
+    return { x: 0, y, scale: 1, opacity: 1 };
   }
   const scale = p < 0.68
     ? 0.8 + 0.26 * smooth(p / 0.68)
     : 1.06 - 0.06 * smooth((p - 0.68) / 0.32);
-  return { x: 0, scale, opacity: 1 };
+  return { x: 0, y: 0, scale, opacity: 1 };
 }
 
 /** Скільки бейджів тримаємо над стікером. Більше — стовп замість акценту. */
 export const BADGE_MAX_LIVE = 3;
 export const BADGE_IN_S = 0.42;
+/** Скільки бейдж висить, перш ніж піти. */
+export const BADGE_HOLD_S = 2.6;
+/** Скільки триває відліт угору. */
+export const BADGE_OUT_S = 0.5;
 
 /**
  * Бейджі, які вже вилетіли на момент t, від найстарішого до найновішого.
@@ -703,12 +759,16 @@ export function liveBadges(
   badges: readonly StickerBadge[] | undefined,
   words: readonly WordTiming[],
   t: number,
-): { badge: StickerBadge; age: number }[] {
+): { badge: StickerBadge; age: number; rank: number }[] {
   if (!badges?.length) return [];
-  return badges
+  const live = badges
     .map((b) => ({ badge: b, age: t - (words[b.at]?.start ?? Number.POSITIVE_INFINITY) }))
-    .filter((x) => Number.isFinite(x.age) && x.age >= 0)
+    .filter((x) => Number.isFinite(x.age) && x.age >= 0 && x.age < BADGE_HOLD_S + BADGE_OUT_S)
     .slice(-BADGE_MAX_LIVE);
+  // Ранг рахується від НАЙНОВІШОГО: він стає просто над предметом, а
+  // попередні виштовхуються вище й тануть. Конвеєр читається як «ось
+  // що відбувається зараз», а стовп однакових плашок — як список.
+  return live.map((x, i) => ({ ...x, rank: live.length - 1 - i }));
 }
 
 /**
@@ -719,12 +779,24 @@ export function liveBadges(
  * сталася. Розворот гасне разом із рухом: предмет, що прилетів і лишився
  * перекошеним, виглядає впалим.
  */
+export function badgeRankFade(rank: number): number {
+  // Другий ряд уже наполовину прозорий, третій майже зник: у кадрі
+  // читається лише найсвіжіша плашка, решта — слід.
+  return rank <= 0 ? 1 : Math.max(0, 0.5 - (rank - 1) * 0.32);
+}
+
 export function badgePop(age: number): {
   opacity: number;
   scale: number;
   lift: number;
   rot: number;
 } {
+  // Відліт: плашка сказала своє й іде вгору, звільняючи кадр. Без цього
+  // вони копичаться до кінця стікера і з акценту стають стовпом.
+  if (age >= BADGE_HOLD_S) {
+    const gone = smooth(Math.min((age - BADGE_HOLD_S) / BADGE_OUT_S, 1));
+    return { opacity: 1 - gone, scale: 1 - 0.2 * gone, lift: -1.4 * gone, rot: 0 };
+  }
   const p = Math.min(Math.max(age / BADGE_IN_S, 0), 1);
   const e = smooth(p);
   return {
@@ -867,4 +939,222 @@ export function postStage(post: PostSpec): 'audio' | 'align' | 'beats' | 'ready'
   if (post.words.length === 0) return 'align';
   if (post.beats.length === 0) return 'beats';
   return 'ready';
+}
+
+/**
+ * Скільки секунд потрібно, щоб прочитати текст У КАДРІ.
+ *
+ * Пів секунди на те, щоб знайти плашку очима, далі власне читання.
+ * Графіку читають повільніше за субтитр: субтитр завжди в тому самому
+ * місці, а плашка щоразу в новому, і її спершу треба знайти.
+ *
+ * Нижня межа 1.2 с не залежить від довжини: навіть «ти» блимає, якщо
+ * дати менше — око просто не встигає перевести погляд.
+ */
+export function readTime(text: string): number {
+  return Math.max(1.2, 0.6 + text.trim().length / 14);
+}
+
+/** Знахідка перевірки. `at` — секунда, на яку перемотати. */
+export interface Finding {
+  at: number;
+  level: 'warn' | 'info';
+  what: string;
+  why: string;
+}
+
+/** Найменший помітний проміжок між двома появами. */
+export const MIN_GAP_S = 0.25;
+/** Довша порожнеча між носіями вже читається як провал. */
+export const MAX_HOLE_S = 0.15;
+/** Довший простій без жодної події читається як зависла картинка. */
+export const MAX_STILL_S = 4;
+/** Більше живих елементів у кадрі не читається. */
+export const MAX_LIVE = 5;
+
+/**
+ * Перевірка ролика перед випуском.
+ *
+ * Дивиться не на «красиво», а на те, чи ВСТИГАЄ глядач: чи вистачає
+ * часу прочитати кожну плашку, чи немає порожніх кадрів, чи не
+ * зливаються дві появи в одну мить.
+ *
+ * Пороги тут — з практики субтитрування плюс запас на пошук елемента.
+ * Це орієнтири, а не істина: якщо перевірка свариться на те, що в кадрі
+ * виглядає добре, правити треба поріг, а не кадр.
+ */
+/** Крок усередині картки: слово, на якому зʼявляється, і його текст. */
+export interface CardStep {
+  at: number;
+  text: string;
+}
+
+export function checkPost(
+  post: PostSpec,
+  /**
+   * Що відбувається ВСЕРЕДИНІ карток — по одному запису на `data-reveal-at`.
+   * Без цього перевірка вважає картку однією нерухомою подією і свариться
+   * на «простій» та «наголос без події» там, де насправді виїжджають рядки.
+   */
+  cardSteps: Readonly<Record<string, readonly CardStep[]>> = {},
+): Finding[] {
+  const out: Finding[] = [];
+  const w = post.words;
+  if (w.length === 0) return out;
+  const at = (i: number): number => w[i]?.start ?? 0;
+
+  const stickers = post.stickers ?? [];
+  const cards = post.cards ?? [];
+
+  // Носії кадру — стікери й картки. Картка витісняє стікери, тому для
+  // порожнеч і простою вони йдуть одним списком.
+  const spans = [
+    ...stickers
+      .filter((s) => w[s.word] != null)
+      .map((s) => ({
+        id: s.id,
+        start: Math.max(0, at(s.word) - (s.lead ?? 0)),
+        end: at(s.word) + s.hold,
+        exit: STICKER_EXIT_LEAD_S,
+      })),
+    ...cards
+      .filter((c) => w[c.word] != null)
+      .map((c) => ({ id: c.id, start: at(c.word), end: at(c.word) + c.hold, exit: CARD_OUT_S })),
+  ].sort((a, b) => a.start - b.start);
+
+  // 1. Чи встигає прочитатись кожен текст. Рахуємо ЕФЕКТИВНУ видимість:
+  //    поки носій гасне, читати вже нічого.
+  for (const s of stickers) {
+    if (w[s.word] == null) continue;
+    const start = at(s.word);
+    const end = start + s.hold;
+    if (s.label) {
+      const shown = end - STICKER_EXIT_LEAD_S - (start + LABEL_DELAY_S);
+      const need = readTime(s.label);
+      if (shown < need) {
+        out.push({
+          at: start,
+          level: 'warn',
+          what: `пігулка «${s.label}» видима ${shown.toFixed(1)} с`,
+          why: `на прочитання треба ${need.toFixed(1)} с — подовжити hold або скоротити текст`,
+        });
+      }
+    }
+    for (const b of s.badges ?? []) {
+      if (w[b.at] == null) continue;
+      const born = at(b.at);
+      const shown = Math.min(BADGE_HOLD_S, end - STICKER_EXIT_LEAD_S - born);
+      const need = readTime(b.text);
+      if (shown < need) {
+        out.push({
+          at: born,
+          level: 'warn',
+          what: `бейдж «${b.text}» видимий ${shown.toFixed(1)} с`,
+          why: `на прочитання треба ${need.toFixed(1)} с — поставити раніше або подовжити носія`,
+        });
+      }
+    }
+  }
+
+  // 2. Порожні кадри між носіями.
+  let reach = 0;
+  for (const s of spans) {
+    if (s.start - reach > MAX_HOLE_S && reach > 0) {
+      out.push({
+        at: reach,
+        level: 'warn',
+        what: `порожньо ${(s.start - reach).toFixed(1)} с перед «${s.id}»`,
+        why: 'попереднє має триматись до кадру, на якому заходить наступне',
+      });
+    }
+    reach = Math.max(reach, s.end);
+  }
+
+  // 3. Дві появи впритул зливаються в одну мить.
+  const cardStepEvents = cards.flatMap((c) =>
+    (cardSteps[c.id] ?? [])
+      .filter((st) => w[st.at] != null)
+      .map((st) => ({ at: at(st.at), id: `рядок «${st.text}»`, text: st.text, card: c })),
+  );
+
+  // Рядок картки лишається до її кінця, тож видимість рахується від
+  // появи; але поки картка гасне, читати вже нічого.
+  for (const e of cardStepEvents) {
+    const end = at(e.card.word) + e.card.hold;
+    const shown = end - CARD_OUT_S - e.at;
+    const need = readTime(e.text);
+    if (e.text && shown < need) {
+      out.push({
+        at: e.at,
+        level: 'warn',
+        what: `рядок «${e.text}» видимий ${shown.toFixed(1)} с`,
+        why: `на прочитання треба ${need.toFixed(1)} с — подовжити картку або посунути рядок раніше`,
+      });
+    }
+  }
+
+  const events = [
+    ...spans.map((s) => ({ at: s.start, id: s.id })),
+    ...cardStepEvents.map((e) => ({ at: e.at, id: e.id })),
+    ...stickers.flatMap((s) =>
+      (s.badges ?? [])
+        .filter((b) => w[b.at] != null)
+        .map((b) => ({ at: at(b.at), id: `бейдж «${b.text}»` })),
+    ),
+  ].sort((a, b) => a.at - b.at);
+  for (let i = 1; i < events.length; i += 1) {
+    const gap = events[i]!.at - events[i - 1]!.at;
+    if (gap > 0 && gap < MIN_GAP_S) {
+      out.push({
+        at: events[i]!.at,
+        level: 'info',
+        what: `${events[i - 1]!.id} і ${events[i]!.id} за ${gap.toFixed(2)} с`,
+        why: 'ближче ніж чверть секунди — око читає це як одну подію',
+      });
+    }
+  }
+
+  // 4. Довгий простій: у кадрі нічого не змінюється.
+  const moments = [0, ...events.map((e) => e.at), w[w.length - 1]!.end];
+  for (let i = 1; i < moments.length; i += 1) {
+    const still = moments[i]! - moments[i - 1]!;
+    if (still > MAX_STILL_S) {
+      out.push({
+        at: moments[i - 1]!,
+        level: 'info',
+        what: `${still.toFixed(1)} с без жодної події`,
+        why: 'стояча картинка читається як зависла — додати бейдж або змінити кадр',
+      });
+    }
+  }
+
+  // 5. Забагато живих одночасно.
+  for (const e of events) {
+    const live = spans.filter((s) => e.at >= s.start && e.at < s.end).length;
+    if (live > MAX_LIVE) {
+      out.push({
+        at: e.at,
+        level: 'warn',
+        what: `${live} елементів у кадрі одночасно`,
+        why: `більше ${MAX_LIVE} не читається — кадр стає шумом`,
+      });
+    }
+  }
+
+  // 6. Наголос без події. Не помилка, але місце, де удар кадру пропадає
+  //    даремно: диктор виділив слово, а в кадрі нічого не сталося.
+  for (let i = 0; i < w.length; i += 1) {
+    if (!w[i]?.accent) continue;
+    const near = events.some((e) => Math.abs(e.at - w[i]!.start) <= 0.35);
+    if (!near) {
+      out.push({
+        at: w[i]!.start,
+        level: 'info',
+        what: `наголос «${w[i]!.word}» без події в кадрі`,
+        why: 'диктор виділив слово — кадр може відповісти появою або бейджем',
+      });
+    }
+  }
+
+  return out.sort((a, b) => a.at - b.at);
 }

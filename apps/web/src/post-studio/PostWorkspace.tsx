@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
 
 import { uploadProjectFiles } from '../providers/registry';
 import { LottieSticker } from './LottieSticker';
@@ -15,13 +16,16 @@ import {
   accentPunch,
   CANVAS,
   cardAt,
+  cardMotion,
   cardRevealCount,
+  checkPost,
   DEFAULT_PRESET,
   emptyPost,
   PRESETS,
   labelPop,
   liveBadges,
   badgePop,
+  badgeRankFade,
   postStage,
   sceneSpan,
   sceneText,
@@ -36,28 +40,24 @@ import {
   stickerSpans,
   wordGlow,
   type Beat,
+  type CardStep,
   type PostSpec,
   type WordTiming,
 } from './post-spec';
-import './post-studio.css';
 
 /*
- * Dev: правка цього модуля або його стилів перезавантажує сторінку цілком.
+ * Стилів цей файл НЕ імпортує — post-studio.css підключений у
+ * app/layout.tsx, і це навмисно.
  *
- * Часткове оновлення тут регулярно ГУБИТЬ post-studio.css. Файл
- * імпортують два модулі (цей і ReelsView), і коли Next підмінює один із
- * них, стильовий чанк назад не додається. Наслідок ні з чим не сплутаєш:
- * кадр розтягується на всю ширину, підлога стає велетенською сіткою, бар
- * злипається в один рядок. Виглядає як зламана верстка, хоч верстка ціла.
+ * Fast Refresh губить стильовий чанк, коли підмінює модуль, який його
+ * імпортує: після кожної правки студія розсипалась (кадр на всю ширину,
+ * велетенська сітка, злиплий бар) і лікувалась тільки перезавантаженням.
+ * Спершу ми списали це на два імпортери й розвели файли — не допомогло,
+ * бо річ у самій підміні. Layout не підміняється ніколи, тож стилі
+ * тримаються.
  *
- * Лікується це тільки повним перезавантаженням, тож просимо про нього
- * одразу: decline() каже webpack не намагатись оновити модуль частково.
- * Перезавантаження на кожну правку тут дешевше за здогадку «я щойно
- * зламав CSS» — і рівно те саме, що робилось руками через Ctrl+R.
- *
- * У продакшн-збірці webpackHot немає взагалі, тож код лишається в dev.
+ * Не переносьте import сюди «щоб було поруч» — симптом повернеться.
  */
-(import.meta as unknown as { webpackHot?: { decline: () => void } }).webpackHot?.decline();
 
 interface PostFile {
   name: string;
@@ -468,8 +468,13 @@ const useDomLayoutEffect = typeof window === 'undefined' ? useEffect : useLayout
  * рахуємо його з реальної ширини, бо поділити довжину на довжину в CSS
  * не можна, а гадати про розмір превʼю не варто — воно ще й гумове.
  */
-function CardLayer({ src, hold, start, time, top }: {
-  src: string; hold: number; start: number; time: number; top: number;
+function CardLayer({ src, hold, start, time, top, words }: {
+  src: string;
+  hold: number;
+  start: number;
+  time: number;
+  top: number;
+  words: readonly WordTiming[];
 }) {
   const [html, setHtml] = useState<string | null>(null);
   const [k, setK] = useState(1);
@@ -509,9 +514,70 @@ function CardLayer({ src, hold, start, time, top }: {
   // малювання, тож перший кадр картки встигав показатись із усіма
   // рядками в закритому стані. На паузі це й лишалось назавжди —
   // порожня біла коробка, бо далі ефект нічим не будився.
+  // Останній застосований стан — щоб його можна було накласти знову без
+  // нового кадру. Саме цього бракувало на паузі: коли React перезаписує
+  // innerHTML, класи злітають, а розбудити ефект нічим — час стоїть.
+  const applyRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return undefined;
+    // Стежимо лише за прямими дітьми: перезапис innerHTML — це саме
+    // childList на цьому вузлі. Глибше не лізе навмисно, бо всередині ми
+    // самі міняємо текст лічильників і зациклили б спостереження.
+    const mo = new MutationObserver(() => {
+      mo.disconnect();
+      applyRef.current();
+      mo.observe(el, { childList: true });
+    });
+    mo.observe(el, { childList: true });
+    return () => mo.disconnect();
+  }, [html]);
+
   useDomLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
+    applyRef.current = () => applyCardState(el, hold, start, time, words);
+    applyRef.current();
+  }, [html, hold, start, time, words]);
+
+  if (!html) return null;
+  const motion = cardMotion(time - start, hold);
+  return (
+    <div
+      className="post-ws__card"
+      ref={wrap}
+      style={{ top: `${(top + motion.y / 100) * 100}%`, opacity: motion.opacity }}
+    >
+      <div
+        className="post-ws__card-in"
+        ref={box}
+        style={{ transform: `translateX(-50%) scale(${k * motion.scale})` }}
+        // Розмітку пише агент у файлі проєкту — той самий рівень довіри,
+        // що й решта файлів ролика. Скрипти через innerHTML не
+        // виконуються, тож картка лишається саме розміткою.
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    </div>
+  );
+}
+
+/**
+ * Накласти на картку стан, що відповідає моменту `time`.
+ *
+ * Винесено з ефекту окремо, бо викликається з двох місць: із самого
+ * ефекту при зміні часу і зі спостерігача, коли розмітку перезаписали.
+ * Стан завжди рахується з нуля, памʼяті про попередній тут немає —
+ * інакше перший же збій лишається назавжди.
+ */
+function applyCardState(
+  el: HTMLElement,
+  hold: number,
+  start: number,
+  time: number,
+  words: readonly WordTiming[],
+): void {
+  {
     // Навішуємо ЩОРАЗУ, без памʼяті про попередній стан.
     //
     // Був захисток «пропустити, якщо число рядків не змінилось» — і саме
@@ -525,26 +591,41 @@ function CardLayer({ src, hold, start, time, top }: {
     // розмітку, наступний кадр поверне класи на місце.
     const items = el.querySelectorAll<HTMLElement>('[data-reveal]');
     const n = cardRevealCount(items.length, hold, start, time);
-    items.forEach((node, i) => node.classList.toggle('is-shown', i < n));
+    items.forEach((node, i) => {
+      // `data-reveal-at="59"` — рядок чекає на СВОЄ слово, а не на свою
+      // чергу. Для переліку це принципово: рівномірний розподіл ставить
+      // третій пункт на секунду раніше, ніж його називають, і глядач
+      // читає те, чого ще не почув.
+      const at = Number(node.dataset.revealAt);
+      const pinned = Number.isFinite(at) && words[at] != null;
+      node.classList.toggle('is-shown', pinned ? time >= words[at]!.start : i < n);
+    });
     // Стан лишається видимим у розмітці: коли картка знову поводитиметься
     // дивно, `data-shown="2/3"` відповідає на перше питання без здогадок.
     el.dataset.shown = `${n}/${items.length}`;
-  }, [html, hold, start, time]);
 
-  if (!html) return null;
-  return (
-    <div className="post-ws__card" ref={wrap} style={{ top: `${top * 100}%` }}>
-      <div
-        className="post-ws__card-in"
-        ref={box}
-        style={{ transform: `translateX(-50%) scale(${k})` }}
-        // Розмітку пише агент у файлі проєкту — той самий рівень довіри,
-        // що й решта файлів ролика. Скрипти через innerHTML не
-        // виконуються, тож картка лишається саме розміткою.
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-    </div>
-  );
+    // Безперервний хід картки — на додачу до покрокового відкриття.
+    // Смуга завантаження, лічильник, стрілка: усе, що має РОСТИ, а не
+    // зʼявлятись. Студія дає лише число, а що з ним робити — ширину,
+    // поворот чи текст — вирішує сама картка.
+    //
+    // `--p` рівний, `--pe` з гальмуванням: справжнє завантаження
+    // доповзає останні відсотки помітно довше, і саме це читається як
+    // завантаження, а не як рівний повзунок.
+    const raw = Math.min(Math.max((time - start) / Math.max(0.001, hold * 0.75), 0), 1);
+    const eased = 1 - (1 - raw) ** 3;
+    for (const node of el.querySelectorAll<HTMLElement>('[data-progress]')) {
+      node.style.setProperty('--p', raw.toFixed(4));
+      node.style.setProperty('--pe', eased.toFixed(4));
+    }
+    for (const node of el.querySelectorAll<HTMLElement>('[data-count]')) {
+      const to = Number(node.dataset.count ?? 0);
+      const from = Number(node.dataset.countFrom ?? 0);
+      const value = from + (to - from) * eased;
+      const dec = Number(node.dataset.countDecimals ?? 0);
+      node.textContent = `${value.toFixed(dec)}${node.dataset.countSuffix ?? ''}`;
+    }
+  }
 }
 
 /**
@@ -642,6 +723,21 @@ export function PostWorkspace({
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [time, setTime] = useState(0);
+
+  /*
+   * Режим зйомки. Вмикає його ЗНІМАЛЬНИК через window.__postStudio.setShot,
+   * а не адреса: застосунок редиректить /projects/<id> на адресу розмови
+   * і губить query, тож ?shot=1 доживав рівно до першого переходу.
+   */
+  const [shotMode, setShotMode] = useState(false);
+
+  // Клас вішаємо на корінь документа, а не на саму студію: панель чату
+  // живе поза цим компонентом, і сховати її зсередини неможливо.
+  useEffect(() => {
+    if (!shotMode) return undefined;
+    document.documentElement.classList.add('post-shot');
+    return () => document.documentElement.classList.remove('post-shot');
+  }, [shotMode]);
   const [playing, setPlaying] = useState(false);
   // Чернетка тексту озвучки. Тримаємо локально й пишемо на blur —
   // збереження на кожну літеру смикало б диск і onRefreshFiles.
@@ -707,13 +803,25 @@ export function PostWorkspace({
   // намальовано, а й ЗАЯВКИ (записи без файлу), які лишає агент, коли
   // під фразу нічого не підійшло.
   const [registry, setRegistry] = useState<RegistryEntry[]>([]);
+  const [registryStamp, setRegistryStamp] = useState(0);
+  // Що відбувається всередині карток. Перевірка інакше вважає картку
+  // однією нерухомою подією і свариться на «простій» там, де насправді
+  // виїжджають рядки. Читаємо самі файли — дублювати кроки в post.json
+  // означало б тримати два джерела правди про одну картку.
+  const [cardSteps, setCardSteps] = useState<Record<string, CardStep[]>>({});
+  // Еталон стилю на кожен розділ: з ним звіряють манеру лінії, кант і
+  // поля. Задається в реєстрі, бо це рішення про набір, не про студію.
+  const [styleRefs, setStyleRefs] = useState<Record<string, string>>({});
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
         const resp = await fetch(rawUrl(projectId, 'assets/stickers/stickers.json'), { cache: 'no-store' });
         if (!resp.ok) return;
-        const data = JSON.parse(await resp.text()) as { stickers?: RegistryEntry[] };
+        const data = JSON.parse(await resp.text()) as {
+          stickers?: RegistryEntry[];
+          reference?: Record<string, string>;
+        };
         const map = new Map<string, string>();
         for (const s of data.stickers ?? []) {
           const label = [s.shows, s.use].filter(Boolean).join(' · ');
@@ -723,6 +831,7 @@ export function PostWorkspace({
         if (!cancelled) {
           setStickerUse(map);
           setRegistry(data.stickers ?? []);
+          setStyleRefs(data.reference ?? {});
         }
       } catch {
         // немає реєстру або битий JSON — покажемо картинки без підписів
@@ -731,7 +840,85 @@ export function PostWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [projectId, stickerFiles.length]);
+  }, [projectId, registryStamp, stickerFiles.map((f) => `${f.name}:${f.mtime}`).join('|')]);
+
+  // Реєстр правиться ЗЗОВНІ — агент дописує в нього після генерації, і
+  // часто пізніше, ніж кладе сам файл. Кількість файлів на це вже не
+  // змінюється, тож без окремого поштовху панель показувала б заявку на
+  // те, що вже намальовано, аж до перезавантаження сторінки.
+  //
+  // Перечитуємо, коли вікно повертає фокус: власник іде в чат, агент
+  // працює, власник вертається — це рівно та мить, коли дані застаріли.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const out: Record<string, CardStep[]> = {};
+      for (const c of post?.cards ?? []) {
+        try {
+          const resp = await fetch(rawUrl(projectId, c.file), { cache: 'no-store' });
+          if (!resp.ok) continue;
+          const doc = new DOMParser().parseFromString(await resp.text(), 'text/html');
+          out[c.id] = [...doc.querySelectorAll<HTMLElement>('[data-reveal-at]')].map((n) => ({
+            at: Number(n.dataset.revealAt),
+            text: (n.textContent ?? '').replace(/\s+/g, ' ').trim(),
+          }));
+        } catch {
+          // файлу немає або битий — перевірка просто не побачить його кроків
+        }
+      }
+      if (!cancelled) setCardSteps(out);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, (post?.cards ?? []).map((c) => `${c.id}:${c.file}`).join('|')]);
+
+  /*
+   * Керування кадром іззовні — для рендера.
+   *
+   * Рендер знімає ЦЕЙ кадр, а не збирає окрему композицію: увесь рух у
+   * нас — чиста функція часу, тож досить перемотати на потрібну секунду
+   * і зняти. Так mp4 не «схожий» на превʼю, а є ним; будь-яка окрема
+   * композиція розходилась би з ним на першій же правці.
+   *
+   * `ready` каже знімальнику, що дані вже завантажені й кадр можна
+   * знімати — інакше перші кадри вийдуть порожніми.
+   */
+  useEffect(() => {
+    const api = {
+      setShot: (on: boolean) => setShotMode(on),
+      setTime: (t: number) => {
+        setTime(t);
+        if (audioRef.current) audioRef.current.currentTime = t;
+        // Кадр CSS-анімацій задається відʼємною затримкою від цієї
+        // змінної — інакше вони крутяться за годинником браузера.
+        document.documentElement.style.setProperty('--shot-t', String(t));
+      },
+      duration: post?.audio?.duration ?? 0,
+      speed: post?.speed ?? 1,
+      /** Скільки триватиме готовий файл із урахуванням прискорення. */
+      outDuration: (post?.audio?.duration ?? 0) / (post?.speed ?? 1),
+      fps: CANVAS.fps,
+      ready: (post?.words.length ?? 0) > 0,
+    };
+    (window as unknown as { __postStudio?: typeof api }).__postStudio = api;
+    return () => {
+      delete (window as unknown as { __postStudio?: typeof api }).__postStudio;
+    };
+  }, [post?.audio?.duration, post?.words.length, post?.speed]);
+
+  useEffect(() => {
+    const bump = (): void => setRegistryStamp((n) => n + 1);
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') bump();
+    };
+    window.addEventListener('focus', bump);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', bump);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
   const posesJson = useMemo(() => files.find((f) => POSES_RE.test(f.name))?.name ?? null, [files]);
   const [poses, setPoses] = useState<PoseEntry[]>([]);
 
@@ -840,6 +1027,9 @@ export function PostWorkspace({
   // Перегляд пози великим планом. Без нього неможливо порівняти позу з
   // еталоном — а саме за цим і дивляться: чи не поплило обличчя.
   const [preview, setPreview] = useState<PoseCard | null>(null);
+  // Перегляд стікера — той самий принцип, що в поз: клік у сітці
+  // ВІДКРИВАЄ, а не робить мовчки. Дію вибирають уже тут.
+  const [stickerPreview, setStickerPreview] = useState<RegistryEntry | null>(null);
   const reference = useMemo(
     () => poseCards.find((c) => c.entry?.id === 'wave') ?? poseCards[0] ?? null,
     [poseCards],
@@ -1072,8 +1262,15 @@ export function PostWorkspace({
     // п'ять символів: закривати на них групу означало б лишити пів
     // рядка порожнім, а наступне слово («навчання») відкинути в новий
     // кадр. Тому стеля за словами висока, а справжня межа — довжина.
-    const MAX_WORDS = 5;
-    const MAX_CHARS = 20;
+    const MAX_WORDS = 4;
+    // Міряно, не вгадано: при кеглі 6.9 % ширини кадру рядок із 20
+    // символів займає 1252 px проти 756 доступних. Тринадцять — стеля,
+    // за якої найдовша реальна група ще вміщається без стискання.
+    //
+    // Стискати рядок під ширину не можна: сусідні кадри отримали б різний
+    // кегль, і субтитр «дихав» би розміром від групи до групи. У
+    // референсі кегль сталий, а короткі група — саме тому.
+    const MAX_CHARS = 13;
     const chunks: WordTiming[][] = [];
     let cur: WordTiming[] = [];
     let len = 0;
@@ -1164,10 +1361,84 @@ export function PostWorkspace({
 
   const scenes = post.scenes ?? [];
   const planned = scenes.filter((s) => s.plan != null).length;
+  const findings = checkPost(post, cardSteps);
+
+
+
+  // Режим зйомки: у кадрі лишається тільки сам кадр, розтягнутий на все
+  // вікно. Панель, плеєр і стрічка слів у mp4 не потрібні, а ховати їх
+  // ззовні означало б покладатись на селектори, які завтра зміняться.
+
+  const warns = findings.filter((f) => f.level === 'warn').length;
   const wanted = registry.filter((r) => r.status === 'needed');
   // Екран не плаває: вікно, термінал і список — це інтерфейс, а не
   // предмет. Плаваючий інтерфейс читається як помилка рендеру.
   const kindOf = new Map(registry.map((r) => [r.id, r.kind ?? 'object']));
+
+  // Перемалювати наявний. Головна вимога тут — не «краще», а «в тому ж
+  // наборі»: стікер, що сам по собі вдаліший, але іншої манери, ламає
+  // кадр сильніше, ніж посередній свій.
+  const redrawSticker = (r: RegistryEntry): void => ask([
+    `Перемалюй стікер «${r.id}» у нашому стилі.`,
+    '',
+    `файл: ${r.file ?? `assets/stickers/${r.id}.png`}`,
+    `для чого: ${r.use ?? '—'}`,
+    `що зображено: ${r.shows ?? '—'}`,
+    '',
+    'СТИЛЬ ГОЛОВНІШИЙ ЗА ЗМІСТ. Роби IMAGE-TO-IMAGE від наявного файлу:',
+    'так зберігаються товщина контурів, насиченість, білий кант і манера',
+    'тіней. Генерація з самого тексту дає інший малюнок, і стікер випадає',
+    'з набору навіть тоді, коли сам по собі кращий.',
+    '',
+    'Міняти можна: композицію, ракурс, вираз, дрібні деталі предмета.',
+    'Міняти НЕ можна: манеру лінії, палітру, наявність і товщину білого',
+    'канта, розмір предмета в кадрі й поля навколо нього.',
+    '',
+    'Промпт, хвіст стилю і три пастки — references/stickers.md плагіна',
+    'create-instagram-post: не просити прозорий фон, не домальовувати кант',
+    'кодом, не лишати порожніх поверхонь. Модель — з поля "model" реєстру.',
+    '',
+    'ПІСЛЯ: прогнати фон через make_stickers.py, ПЕРЕЗАПИСАТИ той самий',
+    'файл (нового id не заводити), у реєстрі оновити shows і quality.',
+    '',
+    'ЗВІТ — трьома рядками: що змінилось, чим стало краще, що перевірити оком.',
+  ].join('\n'));
+
+  // Замовлення бракуючого — одним текстом, бо кнопка стоїть у двох
+  // місцях: у шапці блоку і під самим списком заявок. У шапці її легко
+  // не помітити, а потрібна вона саме там, де видно брифи.
+  const orderWanted = (): void => ask([
+    'Намалюй те, чого бракує в бібліотеці.',
+    '',
+    'ЗАЯВКИ (з assets/stickers/stickers.json, записи зі status: "needed"):',
+    ...wanted.map((r) => [
+      `• ${r.id} → ${r.folder ?? 'assets/stickers/'}${r.id}.png`,
+      `  для чого: ${r.use ?? '—'}`,
+      `  бриф: ${r.brief ?? '—'}`,
+    ].join('\n')),
+    '',
+    'ЯК МАЛЮВАТИ. Промпт, стиль і три пастки — references/stickers.md',
+    'плагіна create-instagram-post: не просити прозорий фон (модель',
+    'намалює шахівницю), не домальовувати кант кодом (вона робить його',
+    'краще сама), не лишати порожніх поверхонь — казати, ЧИМ поверхня',
+    'заповнена, інакше вона домалює туди сторонній предмет.',
+    '',
+    'Модель — та сама, що в полі "model" реєстру. Не міняй її: інша дає',
+    'інший стиль, і набір перестає бути набором.',
+    '',
+    'КУДИ КЛАСТИ. Рівно в ту папку й під тим id, що в заявці. Не вигадуй',
+    'власного імені файлу, не клади в assets/character/ (там живуть пози',
+    'ведучого, і студія покаже твою картинку як зайву позу) і НЕ СТВОРЮЙ',
+    'окремого реєстру: усе, що знаєш про картинку — промах моделі, спосіб',
+    'зрізу фону, заміри — пиши в той самий запис stickers.json.',
+    '',
+    'ПІСЛЯ ГЕНЕРАЦІЇ: прогнати фон через make_stickers.py, покласти файл',
+    'у вказану папку, у реєстрі прибрати status і brief, дописати file.',
+    'Заявка без файлу лишається заявкою.',
+    '',
+    'ЗВІТ — трьома рядками: що намальовано, де лежить, що перевірити оком.',
+    'Розбір процесу лишай у полях реєстру, не в чаті.',
+  ].join('\n'));
   const stickers = post.stickers ?? [];
   const spans = stickerSpans(stickers, post.words);
   const liveStickers = stickerLayout(spans, time, preset.stickers.maxWidthPct);
@@ -1241,7 +1512,7 @@ export function PostWorkspace({
         {onExit ? <button type="button" className="btn" onClick={onExit}>Файли</button> : null}
       </div>
 
-      <div className="post-ws__body">
+      <div className={`post-ws__body${shotMode ? ' is-shot' : ''}`}>
         <div className="post-ws__stage">
           <div
             className="post-ws__frame"
@@ -1285,6 +1556,7 @@ export function PostWorkspace({
                 start={activeCard.start}
                 time={time}
                 top={preset.stickers.top}
+                words={post.words}
               />
             ) : null}
 
@@ -1317,6 +1589,7 @@ export function PostWorkspace({
                     left: `${s.left * 100}%`,
                     width: `${s.width * 100}%`,
                     ['--enter-x' as string]: `${entry.x * 100}%`,
+                    ['--enter-y' as string]: `${entry.y * 100}%`,
                     ['--enter-scale' as string]: `${entry.scale}`,
                     opacity: entry.opacity,
                     // Кут, тривалість і фаза дрейфу — свої в кожного.
@@ -1326,7 +1599,10 @@ export function PostWorkspace({
                     ['--drift-dur' as string]: drift.dur,
                     ['--drift-delay' as string]: drift.delay,
                     ['--drift-dir' as string]: drift.dir,
-                    ['--punch' as string]: `${framePunch - 0.06 * outP}`,
+                    // Вихід: предмет сідає й гасне, а не блимає. Довший
+                    // за вхід навмисно — те, що йде, має встигнути піти.
+                    ['--punch' as string]: `${framePunch - 0.12 * outP}`,
+                    ['--out' as string]: `${outP}`,
                   }}
                 >
                   {/* Салют летить ПІД картинкою і поза її коробкою: іскри
@@ -1357,22 +1633,21 @@ export function PostWorkspace({
                   {/* Бейджі — стовпчиком угору, найновіший найвище. Кожен
                       наступний зсунуто вбік через один: рівний стовп
                       читається як таблиця, а не як розліт. */}
-                  {badges.map(({ badge, age }, k) => {
+                  {badges.map(({ badge, age, rank }) => {
                     const b = badgePop(age);
-                    // Найстаріший унизу, новий над ним. Раніше рахувалось
-                    // навпаки, і поява другого миттєво підкидала перший на
-                    // ряд вище — у кадрі це читалось як «один зник, двоє
-                    // зʼявились деінде». Тепер уже поставлений бейдж не
-                    // рухається взагалі.
-                    const row = k;
+                    // Найновіший стоїть просто над предметом, попередні
+                    // піднімаються на ряд вище і тануть. Перехід між
+                    // рядами — плавний (CSS), тому поява нового виглядає
+                    // як виштовхування, а не як перестрибування.
+                    const row = rank;
                     return (
                       <span
                         key={`${badge.at}-${badge.text}`}
-                        className={`post-ws__badge${badge.tone === 'info' ? ' is-info' : ''}`}
+                        className={`post-ws__badge${badge.tone ? ` is-${badge.tone}` : ''}`}
                         style={{
                           bottom: `${96 + row * 21}%`,
                           left: `${50 + (row % 2 === 0 ? 7 : -7)}%`,
-                          opacity: b.opacity,
+                          opacity: b.opacity * badgeRankFade(rank),
                           transform: `translate(-50%, ${b.lift * 100}%) rotate(${b.rot}deg) scale(${b.scale})`,
                         }}
                       >
@@ -1402,7 +1677,9 @@ export function PostWorkspace({
               return (
                 <div
                   key={`label-${s.sticker.id}-${s.start.toFixed(3)}`}
-                  className="post-ws__sticker-label"
+                  className={`post-ws__sticker-label${
+                    s.sticker.labelTone === 'warn' ? ' is-warn' : ''
+                  }`}
                   style={{
                     left: `${(s.left + s.width / 2) * 100}%`,
                     top: `${stickerBase * 100}%`,
@@ -2033,35 +2310,7 @@ export function PostWorkspace({
                   className="post-block__icon"
                   disabled={busy}
                   title="Віддати заявки в чат — з брифом, папкою і правилами генерації"
-                  onClick={() => ask(
-                    'Намалюй те, чого бракує в бібліотеці.\n\n'
-                    + 'ЗАЯВКИ (з assets/stickers/stickers.json, записи зі status: "needed"):\n'
-                    + wanted
-                      .map((r) => `• ${r.id} → ${r.folder ?? 'assets/stickers/'}${r.id}.png\n`
-                        + `  для чого: ${r.use ?? '—'}\n`
-                        + `  бриф: ${r.brief ?? '—'}`)
-                      .join('\n')
-                    + '\n\nЯК МАЛЮВАТИ. Промпт, стиль і три пастки — '
-                    + 'references/stickers.md плагіна create-instagram-post: не просити '
-                    + 'прозорий фон (модель намалює шахівницю), не домальовувати кант '
-                    + 'кодом (вона робить його краще сама), не лишати порожніх '
-                    + 'поверхонь — казати, ЧИМ поверхня заповнена, інакше вона '
-                    + 'домалює туди сторонній предмет.\n\n'
-                    + 'Модель — та сама, що в полі "model" реєстру. Не міняй її: інша '
-                    + 'дає інший стиль, і набір перестає бути набором.\n\n'
-                    + 'ПІСЛЯ ГЕНЕРАЦІЇ: прогнати фон через make_stickers.py, покласти '
-                    + 'файл у вказану папку, у реєстрі прибрати status і brief, '
-                    + 'дописати file. Заявка без файлу лишається заявкою.\n\n'
-                    + 'КУДИ КЛАСТИ. Рівно в ту папку й під тим id, що в заявці. Не '
-                    + 'вигадуй власного імені файлу, не клади в assets/character/ '
-                    + '(там живуть пози ведучого, і студія покаже твою картинку як '
-                    + '15-ту позу) і НЕ СТВОРЮЙ окремого реєстру: усе, що знаєш про '
-                    + 'картинку — промах моделі, спосіб зрізу фону, заміри — пиши в '
-                    + 'той самий запис stickers.json. Два реєстри в одному проєкті '
-                    + 'розходяться першого ж дня.\n\n'
-                    + 'ЗВІТ — трьома рядками: що намальовано, де лежить, що '
-                    + 'перевірити оком. Розбір процесу лишай у полях реєстру, не в чаті.',
-                  )}
+                  onClick={orderWanted}
                 >
                   Замовити ({wanted.length})
                 </button>
@@ -2090,9 +2339,9 @@ export function PostWorkspace({
                           type="button"
                           key={r.id}
                           className="post-block__pose"
-                          disabled={busy || post.words.length === 0 || !f}
-                          title={`${r.id}\n${r.use ?? ''}`}
-                          onClick={() => (f ? bindSticker(f.name.replace(/\\/g, '/'), r.id) : undefined)}
+                          disabled={busy}
+                          title={`${r.id}\n${r.use ?? ''}\n\nКлік — перемалювати в нашому стилі`}
+                          onClick={() => setStickerPreview(r)}
                         >
                           {f ? (
                             <img src={`${rawUrl(projectId, f.name)}?v=${f.mtime}`} alt="" loading="lazy" />
@@ -2121,6 +2370,17 @@ export function PostWorkspace({
                     <i>{r.brief}</i>
                   </div>
                 ))}
+                <div className="post-block__row">
+                  <button
+                    type="button"
+                    className="post-block__pick"
+                    disabled={busy}
+                    title="Віддати заявки в чат — з брифом, папкою і правилами генерації"
+                    onClick={orderWanted}
+                  >
+                    Замовити {wanted.length === 1 ? 'малюнок' : `малюнки (${wanted.length})`}
+                  </button>
+                </div>
               </div>
             ) : null}
           </BlockShell>
@@ -2414,6 +2674,96 @@ export function PostWorkspace({
 
           <BlockShell
             num={8}
+            title="Перевірка"
+            {...blockShell(
+              'check',
+              `${warns ? ' is-active' : ''}${findings.length === 0 ? ' is-done' : ''}`,
+            )}
+          >
+            <div className="post-block__note">
+              {findings.length === 0
+                ? 'Чисто: усе встигає прочитатись, порожніх кадрів немає.'
+                : `${warns} треба поправити · ${findings.length - warns} на подумати`}
+            </div>
+            {findings.length ? (
+              <div className="post-block__scenes">
+                {findings.map((f, i) => (
+                  <button
+                    type="button"
+                    key={`${f.at}-${i}`}
+                    className={`post-block__scene${f.level === 'warn' ? ' is-warn' : ''}`}
+                    onClick={() => seek(Math.max(0, f.at - 0.4))}
+                    title={f.why}
+                  >
+                    <span className="post-block__scene-at">{f.at.toFixed(1)}</span>
+                    <span className="post-block__scene-text">{f.what}</span>
+                    <span className="post-block__scene-meta">{f.why}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </BlockShell>
+
+          <BlockShell
+            num={9}
+            title="Рендер"
+            {...blockShell(
+              'render',
+              `${findings.length === 0 && post.audio ? ' is-active' : ''}`,
+            )}
+          >
+            <div className="post-block__note">
+              {!post.audio
+                ? 'Спершу звук — без доріжки нема чого рендерити.'
+                : warns
+                  ? `${warns} зауваження в перевірці — рендер запише їх у файл як є.`
+                  : 'Рендер знімає САМ цей кадр покадрово, тому mp4 виходить таким, як тут.'}
+            </div>
+            <div className="post-block__row">
+              <button
+                type="button"
+                className="post-block__pick"
+                disabled={busy || !post.audio}
+                title="Віддати рендер у чат — з адресою студії, id проєкту і доріжкою"
+                onClick={() => ask([
+                  'Відрендер ролик у mp4.',
+                  '',
+                  `python scripts/render.py --url ${typeof window !== 'undefined' ? window.location.origin : ''} `
+                    + `--project ${projectId} --out . --audio ${post.audio?.path ?? ''} `
+                    + `--fps ${CANVAS.fps} --speed ${post.speed ?? 1}`,
+                  '',
+                  'ЯК ЦЕ ПРАЦЮЄ. Скрипт відкриває цю саму студію в режимі ?shot=1',
+                  '(у вікні лишається тільки кадр), перемотує window.__postStudio.setTime',
+                  'по кадрах і знімає кожен. Окремої композиції НЕ збирай: увесь рух —',
+                  'чиста функція часу, тож знятий кадр і є те, що видно в превʼю.',
+                  'Композиція, зібрана заново, розійдеться з превʼю на першій правці.',
+                  '',
+                  'Перед запуском переконайся, що dev-студія піднята (pnpm tools-dev status)',
+                  'і порт у --url збігається з web.',
+                  '',
+                  'ПРИСКОРЕННЯ. --speed стискає ЧАС: кадр на секунді t готового файлу',
+                  'бере секунду t*speed у доріжці, а звук іде через atempo. Анімації',
+                  'персонажа при цьому НЕ прискорюються — вони живуть у власному часі,',
+                  'як і в превʼю.',
+                  '',
+                  'ЗВІТ — трьома рядками: скільки кадрів, скільки вийшов файл, що перевірити оком.',
+                ].join('\n'))}
+              >
+                Відрендерити
+              </button>
+            </div>
+            <div className="post-block__kind-hint">
+              {(() => {
+                const speed = post.speed ?? 1;
+                const out = (post.audio?.duration ?? 0) / speed;
+                return `Кадрів буде ${Math.round(out * CANVAS.fps)} · ${clock(out)}`
+                  + `${speed !== 1 ? ` на ${speed}×` : ''} · ${CANVAS.w}×${CANVAS.h} · ${CANVAS.fps} fps`;
+              })()}
+            </div>
+          </BlockShell>
+
+          <BlockShell
+            num={10}
             title="Швидкість"
             {...blockShell('speed', speed > 1 ? ' is-done' : '')}
             // Значок навмисно НЕ в post-block__head-actions: там усе
@@ -2479,11 +2829,111 @@ export function PostWorkspace({
       </div>
 
       {/*
+        Перегляд стікера. Дії тут ті самі, що були розкидані по сітці:
+        поставити на слово і перемалювати. Клік у сітці лише відкриває —
+        інакше одне натискання мовчки витрачає гроші на генерацію.
+      */}
+      {stickerPreview ? (() => {
+        const f = stickerPreview.file
+          ? stickerByPath.get(stickerPreview.file.split('\\').join('/'))
+          : null;
+        // Еталон свого розділу — поруч, як у позах ведучого. Саме з ним
+        // звіряють манеру, а не з абстрактним «нашим стилем»: словами
+        // товщину канта й насиченість не передати.
+        const refId = styleRefs[stickerPreview.kind ?? 'object'];
+        const refEntry = refId && refId !== stickerPreview.id
+          ? registry.find((x) => x.id === refId)
+          : null;
+        const refFile = refEntry?.file
+          ? stickerByPath.get(refEntry.file.split('\\').join('/'))
+          : null;
+        // Портал у body: модалка живе всередині правої панелі, а та
+        // створює власний шар — z-index усередині нього не підіймає
+        // вікно над композером чату зліва.
+        return createPortal((
+          <div
+            className="post-ws__preview"
+            role="dialog"
+            aria-modal="true"
+            onClick={() => setStickerPreview(null)}
+          >
+            <div className="post-ws__preview-box" onClick={(e) => e.stopPropagation()}>
+              <div className="post-ws__preview-shots">
+                {refFile ? (
+                  <figure className="post-ws__preview-shot">
+                    <img src={`${rawUrl(projectId, refFile.name)}?v=${refFile.mtime}`} alt="" />
+                    <figcaption>еталон · {refEntry?.id}</figcaption>
+                  </figure>
+                ) : null}
+                <figure className="post-ws__preview-shot">
+                  {f ? (
+                    <img src={`${rawUrl(projectId, f.name)}?v=${f.mtime}`} alt="" />
+                  ) : (
+                    <span className="post-block__sticker-gap">файлу ще немає</span>
+                  )}
+                  <figcaption>{stickerPreview.id}</figcaption>
+                </figure>
+              </div>
+              {refFile ? (
+                <div className="post-ws__preview-use">
+                  Звіряй манеру лінії, насиченість, білий кант і поля навколо предмета —
+                  саме вони тримають набір разом.
+                </div>
+              ) : null}
+
+              {stickerPreview.use ? (
+                <div className="post-ws__preview-use">{stickerPreview.use}</div>
+              ) : null}
+              {stickerPreview.shows ? (
+                <div className="post-ws__preview-use">{stickerPreview.shows}</div>
+              ) : null}
+
+              <div className="post-block__row">
+                <button
+                  type="button"
+                  className="post-block__pick"
+                  disabled={busy || !f || post.words.length === 0}
+                  title={post.words.length === 0
+                    ? 'Спершу таймкоди — без них нема до чого кріпити'
+                    : 'Поставити на слово, де стоїть плейхед'}
+                  onClick={() => {
+                    if (f) bindSticker(f.name.split('\\').join('/'), stickerPreview.id);
+                    setStickerPreview(null);
+                  }}
+                >
+                  Поставити на слово
+                </button>
+                <button
+                  type="button"
+                  className="post-block__pick"
+                  disabled={busy || !f}
+                  title="Перемалювати в нашому стилі — image-to-image від наявного файлу"
+                  onClick={() => {
+                    redrawSticker(stickerPreview);
+                    setStickerPreview(null);
+                  }}
+                >
+                  Перемалювати
+                </button>
+                <button
+                  type="button"
+                  className="post-block__pick"
+                  onClick={() => setStickerPreview(null)}
+                >
+                  Закрити
+                </button>
+              </div>
+            </div>
+          </div>
+        ), document.body);
+      })() : null}
+
+      {/*
         Перегляд пози. Поруч завжди еталон — саме з ним звіряють обличчя,
         і тримати їх поруч важливіше за розмір однієї картинки. Дії теж
         тут: у сітці клік має відкривати, а не мовчки щось призначати.
       */}
-      {preview ? (
+      {preview ? createPortal((
         <div
           className="post-ws__preview"
           role="dialog"
@@ -2599,7 +3049,7 @@ export function PostWorkspace({
             </div>
           </div>
         </div>
-      ) : null}
+      ), document.body) : null}
     </div>
   );
 }

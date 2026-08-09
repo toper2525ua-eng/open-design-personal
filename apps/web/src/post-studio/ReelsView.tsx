@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 
 import type { Project } from '../types';
-import './post-studio.css';
+import './reels-view.css';
 
 interface ReelsViewProps {
   projects: readonly Project[];

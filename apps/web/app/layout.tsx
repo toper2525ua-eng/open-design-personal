@@ -5,6 +5,14 @@ import { AnalyticsProvider } from '../src/analytics/provider';
 import '@excalidraw/excalidraw/index.css';
 import '../src/index.css';
 import '../src/styles/home/index.css';
+// Стилі пост-режиму — саме тут, а не в самому PostWorkspace.
+//
+// Fast Refresh губить стильовий чанк, коли підмінює модуль, який його
+// імпортує: у dev після кожної правки студія розсипалась (кадр на всю
+// ширину, велетенська сітка), і рятувало лише перезавантаження. Тут
+// layout не підміняється, тож стилі тримаються незалежно від того,
+// скільки разів перезбереться робочий компонент.
+import '../src/post-studio/post-studio.css';
 
 export const metadata: Metadata = {
   title: 'Open Design',

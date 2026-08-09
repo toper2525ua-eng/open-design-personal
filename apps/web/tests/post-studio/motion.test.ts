@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   accentPunch,
   badgePop,
+  BADGE_HOLD_S,
   BADGE_MAX_LIVE,
+  BADGE_OUT_S,
   ENTER_S,
   GLOW_REST,
   liveBadges,
@@ -121,7 +123,7 @@ describe('stickerEnter', () => {
   it('instant стоїть із першого кадру', () => {
     // Поки перший стікер думки виростає, глядач дивиться на порожнечу —
     // а на початку речення саме ці частки секунди й вирішують.
-    expect(stickerEnter('instant', 0)).toEqual({ x: 0, scale: 1, opacity: 1 });
+    expect(stickerEnter('instant', 0)).toEqual({ x: 0, y: 0, scale: 1, opacity: 1 });
   });
 
   it('pop виростає з перельотом і осідає на одиницю', () => {
@@ -167,7 +169,15 @@ describe('liveBadges', () => {
 
   it('тримає не більше стелі — інакше стовп замість акценту', () => {
     const many = Array.from({ length: 8 }, () => ({ text: '×', at: 1 }));
-    expect(liveBadges(many, words, 5)).toHaveLength(BADGE_MAX_LIVE);
+    expect(liveBadges(many, words, 1.5)).toHaveLength(BADGE_MAX_LIVE);
+  });
+
+  it('плашка не висить вічно — відлітає й зникає', () => {
+    // Інакше до кінця стікера вони копичаться і з акценту стають стовпом.
+    const one = [{ text: '−10 хв', at: 1 }];
+    expect(liveBadges(one, words, 1 + BADGE_HOLD_S + BADGE_OUT_S + 0.1)).toHaveLength(0);
+    expect(badgePop(BADGE_HOLD_S + BADGE_OUT_S).opacity).toBeCloseTo(0, 2);
+    expect(badgePop(BADGE_HOLD_S + BADGE_OUT_S * 0.5).lift).toBeLessThan(0);
   });
 
   it('без бейджів і без слова нічого не показує', () => {

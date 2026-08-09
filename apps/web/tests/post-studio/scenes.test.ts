@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CARD_IN_S,
+  checkPost,
+  readTime,
+  CARD_OUT_S,
+  cardMotion,
+  cardRevealCount,
   SCENE_MAX_S,
   sceneAt,
   sceneSpan,
@@ -134,5 +140,114 @@ describe('lead', () => {
     const words: WordTiming[] = [{ word: 'Ти', start: 0.14, end: 0.26 }];
     const [span] = stickerSpans([{ id: 'you', word: 0, hold: 4, lead: 0.2 }], words);
     expect(span!.start).toBe(0);
+  });
+});
+
+describe('cardRevealCount', () => {
+  it('перший рядок відкритий одразу, ще до першого слова', () => {
+    // Порожня біла коробка на початку картки читається як «нічого не
+    // завантажилось», а не як «зараз почнеться».
+    expect(cardRevealCount(4, 3.6, 8.26, 8.26)).toBe(1);
+    expect(cardRevealCount(4, 3.6, 8.26, 8.0)).toBe(1);
+  });
+
+  it('відкриває рівномірно і не більше, ніж є', () => {
+    expect(cardRevealCount(4, 4, 0, 1.6)).toBe(3);
+    expect(cardRevealCount(4, 4, 0, 99)).toBe(4);
+  });
+
+  it('останню чверть тримає повний склад', () => {
+    // Щоб фінальний рядок устиг прочитатись, а не блимнув.
+    expect(cardRevealCount(4, 4, 0, 3)).toBe(4);
+  });
+
+  it('картка без рядків не ламає лічильник', () => {
+    expect(cardRevealCount(0, 4, 0, 2)).toBe(0);
+  });
+});
+
+describe('cardMotion', () => {
+  it('приїжджає знизу і сідає на місце', () => {
+    const start = cardMotion(0, 4);
+    expect(start.y).toBeGreaterThan(3);
+    expect(start.scale).toBeLessThan(1);
+    const settled = cardMotion(CARD_IN_S, 4);
+    expect(settled.y).toBeCloseTo(0, 2);
+    expect(settled.scale).toBeCloseTo(1, 2);
+  });
+
+  it('не проявляється — приходить щільною', () => {
+    // Напівпрозора картка читається як недомальована, а не як така, що
+    // приходить: роботу робить рух.
+    expect(cardMotion(0, 4).opacity).toBe(1);
+    expect(cardMotion(1, 4).opacity).toBe(1);
+  });
+
+  it('іде рухом, а не зникає разом зі своїм інтервалом', () => {
+    const leaving = cardMotion(4 - CARD_OUT_S / 2, 4);
+    expect(leaving.opacity).toBeLessThan(1);
+    expect(leaving.opacity).toBeGreaterThan(0);
+    expect(leaving.y).toBeLessThan(0);
+    expect(cardMotion(4, 4).opacity).toBeCloseTo(0, 2);
+  });
+});
+
+describe('checkPost', () => {
+  const words: WordTiming[] = [
+    { word: 'раз', start: 0, end: 0.4 },
+    { word: 'два', start: 1, end: 1.4 },
+    { word: 'три', start: 2, end: 2.4, accent: true },
+  ];
+  const base = {
+    version: 1 as const,
+    title: 't',
+    preset: 'vibe-light' as const,
+    audio: null,
+    script: '',
+    words,
+    beats: [],
+  };
+
+  it('ловить текст, який не встигає прочитатись', () => {
+    // Найдорожча помилка ролика: плашка є, а прочитати її ніколи.
+    const f = checkPost({
+      ...base,
+      stickers: [{ id: 'a', word: 0, hold: 1.0, label: 'дуже довгий підпис' }],
+    });
+    expect(f.some((x) => x.level === 'warn' && x.what.includes('пігулка'))).toBe(true);
+  });
+
+  it('не свариться, коли часу вистачає', () => {
+    const f = checkPost({
+      ...base,
+      stickers: [{ id: 'a', word: 0, hold: 6, label: 'ти' }],
+    });
+    expect(f.filter((x) => x.level === 'warn')).toHaveLength(0);
+  });
+
+  it('рахує видимість МІНУС вихід носія', () => {
+    // Поки стікер гасне, читати вже нічого — саме на цьому ми й
+    // промахнулись у живому ролику.
+    const short = checkPost({
+      ...base,
+      stickers: [{ id: 'a', word: 0, hold: readTime('ок') + 0.2, label: 'ок' }],
+    });
+    expect(short.some((x) => x.what.includes('пігулка'))).toBe(true);
+  });
+
+  it('ловить порожній кадр між носіями', () => {
+    const f = checkPost({
+      ...base,
+      stickers: [
+        { id: 'a', word: 0, hold: 0.3 },
+        { id: 'b', word: 2, hold: 1 },
+      ],
+    });
+    expect(f.some((x) => x.what.includes('порожньо'))).toBe(true);
+  });
+
+  it('позначає наголос, на який кадр не відповів', () => {
+    const f = checkPost({ ...base, stickers: [{ id: 'a', word: 0, hold: 6, label: 'ти' }] });
+    expect(f.some((x) => x.what.includes('наголос'))).toBe(true);
   });
 });

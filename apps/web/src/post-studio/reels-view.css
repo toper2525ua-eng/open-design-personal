@@ -1,0 +1,54 @@
+/*
+ * Стилі списку роликів — окремим файлом навмисно.
+ *
+ * Доти вони жили в post-studio.css, і той файл імпортували ДВА модулі:
+ * робоча студія і цей список. Через це часткове оновлення в dev губило
+ * стильовий чанк — Next підмінював один модуль, а стилі назад не
+ * повертались, і студія розсипалась (кадр на всю ширину, велетенська
+ * сітка, злиплий бар). Лікували повним перезавантаженням на кожну
+ * правку; тепер у кожного файлу свій єдиний імпортер, і перезавантаження
+ * більше не потрібне.
+ */
+
+.reels-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.reels-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--bg-panel);
+  cursor: pointer;
+  text-align: left;
+}
+
+.reels-card:hover { border-color: var(--border-strong); }
+
+.reels-card__frame {
+  aspect-ratio: 9 / 16;
+  border-radius: 8px;
+  background: var(--bg-muted);
+  border: 1px solid var(--border-soft);
+}
+
+.reels-card__name {
+  font-size: 13px;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Той самий вигляд, що й у студії: підказка під заголовком списку. */
+.post-ws__hint {
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
