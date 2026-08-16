@@ -12,6 +12,36 @@ function makeRoot(): string {
 }
 
 describe("desktop updater config", () => {
+  /*
+   * ПРАВКА ФОРКУ. Стрічка оновлень веде на наші релізи GitHub, а не на
+   * сервер розробників. Перевіряємо саме це: типове значення мусить
+   * бути ЗАПЕЧЕНЕ у збірку, бо на чужій машині змінну оточення ніхто
+   * не виставить, а оновлення потрібне саме там.
+   */
+  it("типово дивиться на наш GitHub, а не на сервер розробників", () => {
+    const config = resolveDesktopUpdaterConfig({
+      appVersion: "0.16.1",
+      env: { [DESKTOP_UPDATE_ENV.ENABLED]: "1" },
+      source: SIDECAR_SOURCES.PACKAGED,
+    });
+    expect(config.metadataUrl).toBe(
+      "https://github.com/toper2525ua-eng/open-design-personal/releases/latest/download/metadata.json",
+    );
+    expect(config.metadataUrl).not.toContain("releases.open-design.ai");
+  });
+
+  it("змінна оточення й далі перебиває типове значення", () => {
+    const config = resolveDesktopUpdaterConfig({
+      appVersion: "0.16.1",
+      env: {
+        [DESKTOP_UPDATE_ENV.ENABLED]: "1",
+        [DESKTOP_UPDATE_ENV.METADATA_URL]: "https://example.test/feed.json",
+      },
+      source: SIDECAR_SOURCES.PACKAGED,
+    });
+    expect(config.metadataUrl).toBe("https://example.test/feed.json");
+  });
+
   it("defaults counted beta internal builds to the beta update channel", () => {
     const root = makeRoot();
     try {
@@ -25,7 +55,7 @@ describe("desktop updater config", () => {
       });
 
       expect(config.channel).toBe(DESKTOP_UPDATE_CHANNELS.BETA);
-      expect(config.metadataUrl).toContain("/beta/latest/metadata.json");
+      expect(config.metadataUrl).toContain("/releases/latest/download/metadata-beta.json");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -63,7 +93,7 @@ describe("desktop updater config", () => {
       });
 
       expect(config.channel).toBe(DESKTOP_UPDATE_CHANNELS.PRERELEASE);
-      expect(config.metadataUrl).toContain("/prerelease/latest/metadata.json");
+      expect(config.metadataUrl).toContain("/releases/latest/download/metadata-prerelease.json");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -82,7 +112,7 @@ describe("desktop updater config", () => {
       });
 
       expect(config.channel).toBe(DESKTOP_UPDATE_CHANNELS.PREVIEW);
-      expect(config.metadataUrl).toContain("/preview/latest/metadata.json");
+      expect(config.metadataUrl).toContain("/releases/latest/download/metadata-preview.json");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

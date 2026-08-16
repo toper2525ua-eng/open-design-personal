@@ -38,7 +38,22 @@ export const DESKTOP_UPDATE_ENV = Object.freeze({
   PLATFORM: "OD_UPDATE_PLATFORM",
 } as const);
 
-const DEFAULT_RELEASE_ORIGIN = "https://releases.open-design.ai";
+/*
+ * ПРАВКА ФОРКУ. Стрічка оновлень — наші релізи на GitHub, не сервер
+ * розробників Open Design.
+ *
+ * Чому не змінною оточення. `OD_UPDATE_METADATA_URL` читається з env
+ * ПРОЦЕСУ застосунку — на чужій машині її ніхто не виставить, а саме
+ * там оновлення й потрібне. Тому типове значення мусить бути запечене
+ * в збірку; env лишається як перебивка для перевірок.
+ *
+ * `releases/latest/download/<файл>` — адреса, яку GitHub тримає
+ * незмінною і сам переспрямовує на найсвіжіший реліз. Тобто публікуємо
+ * новий реліз — і всі встановлені копії бачать його без жодної правки
+ * в коді.
+ */
+const DEFAULT_RELEASE_REPO = "https://github.com/toper2525ua-eng/open-design-personal";
+const DEFAULT_RELEASE_ORIGIN = `${DEFAULT_RELEASE_REPO}/releases/latest/download`;
 const BETA_POLL_INTERVAL_MS = 15 * 60 * 1000;
 const STABLE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_POLL_INITIAL_DELAY_MS = 5000;
@@ -116,7 +131,13 @@ export function isDesktopUpdateChannel(value: unknown): value is DesktopUpdateCh
 }
 
 function defaultMetadataUrl(channel: DesktopUpdateChannel): string {
-  return `${DEFAULT_RELEASE_ORIGIN}/${channel}/latest/metadata.json`;
+  // У релізі GitHub усі файли лежать пласко, теки каналів там немає —
+  // тому канал іде в ІМʼЯ файлу. Стабільний лишається просто
+  // `metadata.json`, щоб адреса читалась і руками.
+  const name = channel === DESKTOP_UPDATE_CHANNELS.STABLE
+    ? "metadata.json"
+    : `metadata-${channel}.json`;
+  return `${DEFAULT_RELEASE_ORIGIN}/${name}`;
 }
 
 export function normalizeDownloadRoot(value: string): string {

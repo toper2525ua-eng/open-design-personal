@@ -1,0 +1,77 @@
+{
+  "$schema": "https://open-design.ai/schemas/plugin.v1.json",
+  "specVersion": "1.0.0",
+  "name": "create-instagram-post",
+  "title": "Instagram Post (UA)",
+  "version": "0.1.0",
+  "description": "Vertical Ukrainian-language Reels about vibe-coding: recurring illustrated host, word-synced captions, animated stickers on a code backdrop.",
+  "license": "MIT",
+  "tags": ["create", "video", "instagram", "reels", "ukrainian", "hyperframes"],
+  "compat": {
+    "agentSkills": [{ "path": "./SKILL.md" }]
+  },
+  "od": {
+    "kind": "scenario",
+    "taskKind": "new-generation",
+    "mode": "video",
+    "scenario": "video",
+    "surface": "video",
+    "useCase": {
+      "query": "Зроби Instagram-пост про {{topic}} на {{duration}} голосом {{voice}}."
+    },
+    "context": {
+      "skills": [{ "path": "./SKILL.md" }],
+      "atoms": [
+        "discovery-question-form",
+        "todo-write",
+        "file-read",
+        "file-write",
+        "file-edit",
+        "media-image"
+      ]
+    },
+    "pipeline": {
+      "stages": [
+        { "id": "topic", "atoms": ["discovery-question-form"] },
+        { "id": "script", "atoms": ["todo-write", "file-write"] },
+        { "id": "align", "atoms": ["file-write"] },
+        { "id": "scenes", "atoms": ["file-edit"] },
+        { "id": "frame", "atoms": ["file-edit", "media-image"] },
+        { "id": "render", "atoms": ["file-write"] }
+      ]
+    },
+    "inputs": [
+      {
+        "name": "topic",
+        "type": "string",
+        "required": false,
+        "label": "Тема",
+        "placeholder": "лишити порожнім — запропоную три варіанти"
+      },
+      {
+        "name": "duration",
+        "type": "select",
+        "required": false,
+        "label": "Тривалість",
+        "options": ["20 секунд", "30 секунд", "45 секунд"],
+        "default": "30 секунд"
+      },
+      {
+        "name": "voice",
+        "type": "select",
+        "required": false,
+        "label": "Голос",
+        "options": ["Остап (чоловічий)", "Поліна (жіночий)"],
+        "default": "Остап (чоловічий)"
+      },
+      {
+        "name": "reuseCharacter",
+        "type": "boolean",
+        "required": false,
+        "label": "Той самий персонаж",
+        "default": true
+      }
+    ],
+    "capabilities": ["prompt:inject", "fs:write", "subprocess"]
+  }
+}

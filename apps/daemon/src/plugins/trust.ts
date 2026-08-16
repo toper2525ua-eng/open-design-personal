@@ -62,12 +62,28 @@ export function requiredCapabilities(manifest: PluginManifest): string[] {
 // Compute the granted set Phase 1 applies for a given trust tier and
 // manifest. Restricted plugins start at `prompt:inject`; trusted plugins
 // receive everything required by their manifest plus the trusted defaults.
+//
+// ПРАВКА ФОРКУ. `bundled` теж отримує права, оголошені в маніфесті —
+// але НЕ широкі типові права `trusted`.
+//
+// Чому. Вкладені плагіни їдуть усередині образу застосунку і, за
+// коментарем самого `bundled.ts`, «ніколи не потрапляють у домашній
+// корінь користувача». Тобто це не чужий код із мережі, а частина тієї
+// самої збірки, яку користувач уже встановив і якій довіряє. Доти
+// будь-який вкладений плагін отримував рівно `prompt:inject`, і плагін,
+// що просить `fs:write` + `subprocess`, їхав у образі МЕРТВИМ: текст
+// скіла підсовував, а ні файл записати, ні скрипт запустити не міг.
+// Помітити це можна було лише в кадрі — жодної помилки не виникає.
+//
+// Межа лишається: додаємо тільки те, що маніфест назвав ЯВНО, тож
+// вкладений плагін має менше прав, ніж той самий плагін, поставлений
+// локально (той бере ще `mcp:*`, `connector:*`, `genui:*`).
 export function resolveCapabilitiesGranted(args: {
   manifest: PluginManifest;
   trust: TrustTier;
 }): string[] {
   const out = new Set(defaultCapabilities(args.trust));
-  if (args.trust === 'trusted') {
+  if (args.trust === 'trusted' || args.trust === 'bundled') {
     for (const cap of requiredCapabilities(args.manifest)) {
       out.add(stripOptionalSuffix(cap));
     }

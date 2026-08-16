@@ -1,0 +1,114 @@
+{
+  "approved": true,
+  "approvedAt": "2026-08-01",
+  "note": "Пози живуть у спільній бібліотеці Open Design (od library) — тому доступні з БУДЬ-ЯКОГО проєкту, не тільки там, де підключений цей плагін. Файли поруч у цій папці — резервна копія й джерело для переімпорту.",
+  "library": {
+    "searchAll": "od library search reels-host",
+    "getOne": "od library list --tag \"reels-host,<pose-id>\"",
+    "applyToProject": "od library apply <asset-id> --project <project-id>"
+  },
+  "model": "openrouter/google/gemini-2.5-flash-image",
+  "base_prompt": "Clean flat vector illustration of a young Ukrainian man, late 20s, short dark brown hair, neatly trimmed beard, warm friendly smile, wearing a beige open jacket over a plain grey t-shirt. Anime-influenced but semi-realistic proportions, expressive eyes, thick clean outlines, soft cel shading, subtle warm skin tones. Waist-up framing, facing camera. Plain white background, no props, no text, no logo. Vertical composition, character centered, sharp edges suitable for cutout.",
+  "style_lock": "Keep the exact same character, face, hairstyle, beard, eye color, skin tone, outfit, line weight and art style as the reference image. Change only the pose and expression. Plain flat white background, no checkerboard, no gradient, no ground shadow, no backdrop objects. Match the reference framing exactly: same figure scale, same head position, the jacket hem must reach the bottom edge of the canvas — no empty gap under the figure, no arcs or ovals. Never crop hands or elbows; keep a white margin on the left and right borders so the extended hand and both elbows stay inside the frame. No text.",
+  "post_process": "НЕ проси в промпті «transparent background» чи «alpha channel» — модель малює пікселі, тому в відповідь на це вона МАЛЮЄ шахматку прозорості як картинку (перевірено на v6/v7: pix_fmt=rgb24). Проси рівний білий фон, а альфу роби окремим кроком, потім перевір pix_fmt=rgba. Якщо фон вийшов не той — зрізай, а не перегенеровуй: обличчя вже збіглося, друга генерація його змінить.",
+  "warning_alpha": "hyperframes remove-background на цих позах НЕ використовувати: матинг-модель приймає світлу бежеву куртку за фон. Заміряно на present 04.08 — знищено 41.5% фігури (права пола alpha 0, низ 10, ліва 141). Фон тут рівний білий, тому альфу різати заливкою від країв (flood fill по межі min(RGB)>=238) — вона не чіпає саму графіку: alpha bbox збігся з bbox непрозорих пікселів піксель-у-піксель.",
+  "reference": "character-wave.png",
+  "poses": [
+    {
+      "id": "wave",
+      "file": "character-wave.png",
+      "libraryId": "69cea151-7fa9-4014-8440-6c0400122672",
+      "gesture": "one hand raised in a friendly wave",
+      "use": "вітання, перший кадр ролика",
+      "quality": "еталон — оригінал як згенеровано 01.08, НЕ чіпати remove-background: сегментація з'їдає праву полу куртки"
+    },
+    {
+      "id": "point",
+      "file": "pose-point.png",
+      "libraryId": "e9c3a01f-8680-4988-8188-e5f1b5a49bcb",
+      "gesture": "pointing up with index finger, confident",
+      "use": "ПЕРШИЙ пункт списку (один палець) або акцент на головній тезі",
+      "quality": "ok — перероблена через i2i від еталона 04.08, фон зрізаний, alpha на місці"
+    },
+    {
+      "id": "crossed",
+      "file": "pose-crossed.png",
+      "libraryId": "c8939d91-8e72-40ff-b37e-753a92db42d4",
+      "gesture": "arms crossed, calm confident look",
+      "use": "висновок, фінальна фраза",
+      "quality": "ok — перероблена через i2i від еталона 04.08, фон зрізаний, alpha на місці"
+    },
+    {
+      "id": "shrug",
+      "file": "pose-shrug.png",
+      "libraryId": "f06cf546-a5b4-4206-9727-ef455fd51296",
+      "gesture": "shrugging with both palms up, puzzled",
+      "use": "питання до глядача, проблема",
+      "quality": "ok — перероблена через i2i від еталона 04.08, фон зрізаний, alpha на місці"
+    },
+    {
+      "id": "facepalm",
+      "file": "pose-facepalm.png",
+      "libraryId": "18708c36-2c69-448c-8b22-ab0799816599",
+      "gesture": "palm covering face, frustrated",
+      "use": "помилка, біль глядача",
+      "quality": "з тексту — звірити з еталоном"
+    },
+    {
+      "id": "thumbsup",
+      "file": "pose-thumbsup.png",
+      "libraryId": "742a7113-3b0d-442d-906f-aa540a0b5c3d",
+      "gesture": "thumbs up, satisfied smile",
+      "use": "рішення спрацювало",
+      "quality": "ok — перероблена через i2i від еталона 04.08, фон зрізаний, alpha на місці"
+    },
+    {
+      "id": "explain",
+      "file": "pose-explain.png",
+      "libraryId": "303ff03f-7188-48ba-995b-409ff7acc488",
+      "gesture": "both hands open mid-gesture, explaining",
+      "use": "нейтральна робоча поза",
+      "quality": "ok — перероблена через i2i від еталона 04.08, фон зрізаний, alpha на місці"
+    },
+    {
+      "id": "cta",
+      "file": "pose-cta.png",
+      "libraryId": "822e7f91-4d31-4a5a-8d17-93f63f07604a",
+      "gesture": "pointing directly at the viewer with index finger, arm extended toward camera, inviting confident smile",
+      "use": "заклик до дії, фінальний кадр — підпишись, тисни",
+      "quality": "ok — i2i від еталона 04.08, фон зрізаний, alpha на місці"
+    },
+    {
+      "id": "present",
+      "file": "pose-present.png",
+      "libraryId": "439532d2-2119-4d42-967b-a637ee3419d9",
+      "gesture": "one arm raised in front of the chest, elbow bent, forearm angled outward, open upturned palm, presenting",
+      "use": "підводка до графіки чи скріншота збоку",
+      "quality": "ok — i2i від еталона 04.08, масштаб вирівняно з рештою (верх 107 проти 117 в еталона, низ куртки в край кадру, 614 px проти 619), кисті й лікті в кадрі, фон зрізаний заливкою, alpha на місці"
+    },
+    {
+      "id": "thinking",
+      "file": "pose-thinking.png",
+      "libraryId": "19be3cb0-d252-4f54-949d-787431b35521",
+      "gesture": "hand resting on chin, thoughtful, eyes looking up and to the side",
+      "use": "роздум, перехід від проблеми до рішення",
+      "quality": "ok — i2i від еталона 04.08, фон зрізаний, alpha на місці"
+    },
+    {
+      "id": "count",
+      "file": "pose-count.png",
+      "libraryId": "7341c964-0d38-4283-a198-f0193ebf59d2",
+      "gesture": "one hand raised beside the shoulder, elbow bent close to the body, index and middle fingers extended upward, counting",
+      "use": "ДРУГИЙ пункт списку — на пальцях показано рівно два. Не ставити на «перше» чи «третє»: глядач читає кількість пальців буквально",
+      "quality": "ok — i2i від еталона 04.08, кадр у смузі еталона (верх 116 проти 117, низ у край 595 проти 619), фон зрізаний заливкою, alpha на місці. Райдужка Δ(-2,-10,-12) — на межі смуги решти поз, у кадрі з cta не змішувати великим планом"
+    },
+    {
+      "id": "stop",
+      "file": "pose-stop.png",
+      "libraryId": "9183377e-a7cd-4854-9b03-13cde9bf6c4d",
+      "gesture": "flat open palm raised toward the viewer at chest height, elbow bent close to the body, serious cautioning expression",
+      "use": "застереження, антипатерн — «так не роби»",
+      "quality": "ok — i2i від еталона 04.08, кадр збігся з еталоном (верх 117, низ у край 619 проти 619), фон зрізаний заливкою, alpha на місці. Райдужка Δ(0,-4,-10), у смузі cta"
+    }
+  ]
+}

@@ -39,6 +39,11 @@ const CANONICAL = new Map<string, { taskKind: string; pipelineStages: string[] }
 // starters sit here too: they are user-facing plugins for downstream
 // handoff, but they must not become the canonical tune-collab fallback.
 const SIBLINGS = new Map<string, { taskKind: string }>([
+  // ПРАВКА ФОРКУ. Плагін студії вертикальних роликів. Лежить тут, а не
+  // в даних користувача, навмисно: вкладені плагіни їдуть усередині
+  // образу, тобто оновлюються РАЗОМ із застосунком. Інакше кожна правка
+  // скіла чи скриптів доїжджала б до інших машин руками.
+  ['create-instagram-post', { taskKind: 'new-generation' }],
   ['od-default',          { taskKind: 'new-generation' }],
   ['od-media-generation', { taskKind: 'new-generation' }],
   ['od-plugin-authoring', { taskKind: 'new-generation' }],

@@ -1,0 +1,1164 @@
+{
+ "version": 1,
+ "note": "Словник рухів. Прозова частина дублює references/motion-library.md коротко; повний текст із причинами — там. Demo — мініролик, який студія програє в кадрі по колу. Поле from — живі приклади: назва ролика (id проєкту) і речення, де рух уже спрацював; сумніваєшся в числах — відкрий той post.json.",
+ "entries": [
+  {
+   "id": "hook-solo-lead",
+   "title": "Гак: предмет уже в кадрі",
+   "pick": "Перше речення ролика?",
+   "shape": "1 стікер · пігулка · 1–2 бейджі",
+   "enter": "на нульовій секундi ролика — instant + lead; гак на своєму слові може влітати збоку",
+   "inside": "бейджі накопичують число, а не показують готовим",
+   "exit": "ріже прихід наступного носія",
+   "axes": [
+    "enter instant|from-right|from-left",
+    "lead 0.1–0.3 (лише з instant)",
+    "бейджів 1–2",
+    "тон info|warn",
+    "пігулка є/немає"
+   ],
+   "fixed": [
+    "на ПЕРШОМУ слові ролика вліт заборонений: поки предмет летить, глядач дивиться на порожнечу — а це секунди, де вирішується скрол"
+   ],
+   "avoid": "перше речення — питання: то empty-face",
+   "demo": {
+    "duration": 4.05,
+    "words": [
+     {
+      "word": "Виставив",
+      "start": 0.1,
+      "end": 0.55
+     },
+     {
+      "word": "ролик.",
+      "start": 0.6,
+      "end": 0.95
+     },
+     {
+      "word": "Двісті",
+      "start": 1.15,
+      "end": 1.55,
+      "accent": true
+     },
+     {
+      "word": "переглядів.",
+      "start": 1.6,
+      "end": 2.05
+     },
+     {
+      "word": "Знову",
+      "start": 2.3,
+      "end": 2.65
+     },
+     {
+      "word": "нуль.",
+      "start": 2.7,
+      "end": 3.5,
+      "accent": true
+     }
+    ],
+    "scenes": [
+     {
+      "from": 0,
+      "to": 3
+     },
+     {
+      "from": 4,
+      "to": 5,
+      "continues": true
+     }
+    ],
+    "stickers": [
+     {
+      "id": "app-window",
+      "word": 0,
+      "hold": 3.65,
+      "file": "assets/stickers/app-window.png",
+      "enter": "from-right",
+      "label": "твій ролик",
+      "labelTone": "own",
+      "badges": [
+       {
+        "text": "200 переглядів",
+        "at": 2,
+        "tone": "warn"
+       },
+       {
+        "text": "і нуль",
+        "at": 4,
+        "tone": "info"
+       }
+      ]
+     }
+    ],
+    "beats": [
+     {
+      "index": 0,
+      "text": "",
+      "start": 0,
+      "end": 2.1,
+      "pose": "wave-cut"
+     },
+     {
+      "index": 1,
+      "text": "",
+      "start": 2.1,
+      "end": 4.05,
+      "pose": "facepalm"
+     }
+    ]
+   },
+   "group": "solo",
+   "from": [
+    "«виставив ролик» (127f84f9) реч.1 — app-window, lead 0.1, бейдж «200 переглядів»",
+    "«холодні листи» (6d0fcd28) реч.1 — envelope-stack, бейджі +100/0 накопичують число"
+   ]
+  },
+  {
+   "id": "solo-badge-chain",
+   "title": "Один предмет крізь думку",
+   "pick": "Думка тягнеться 2–4 реченнями про той самий предмет?",
+   "shape": "1 стікер · 3–4 бейджі · continues",
+   "enter": "instant у вільний кадр, pop поверх догораючого",
+   "inside": "предмет стоїть, стан навколо міняється бейджами",
+   "exit": "гасне на word+hold — continues зняв стелю",
+   "axes": [
+    "бейджів 2–4",
+    "інтервал 1.5–2.5 с",
+    "тони чергуються",
+    "поза на кожному реченні"
+   ],
+   "fixed": [
+    "continues: true на кожній сцені думки, крім першої — інакше пізні бейджі не з'являться"
+   ],
+   "avoid": "це вже другий такий запис у ролику",
+   "demo": {
+    "duration": 5.3,
+    "words": [
+     {
+      "word": "Ти",
+      "start": 0.1,
+      "end": 0.3
+     },
+     {
+      "word": "не",
+      "start": 0.35,
+      "end": 0.5
+     },
+     {
+      "word": "нагадуєш.",
+      "start": 0.55,
+      "end": 1.05
+     },
+     {
+      "word": "Не",
+      "start": 1.35,
+      "end": 1.5
+     },
+     {
+      "word": "вставляєш",
+      "start": 1.55,
+      "end": 2.0
+     },
+     {
+      "word": "контекст.",
+      "start": 2.05,
+      "end": 2.5
+     },
+     {
+      "word": "Написав",
+      "start": 2.9,
+      "end": 3.3
+     },
+     {
+      "word": "один",
+      "start": 3.35,
+      "end": 3.6,
+      "accent": true
+     },
+     {
+      "word": "раз.",
+      "start": 3.65,
+      "end": 4.75
+     }
+    ],
+    "scenes": [
+     {
+      "from": 0,
+      "to": 2
+     },
+     {
+      "from": 3,
+      "to": 5,
+      "continues": true
+     },
+     {
+      "from": 6,
+      "to": 8,
+      "continues": true
+     }
+    ],
+    "stickers": [
+     {
+      "id": "you",
+      "word": 0,
+      "hold": 4.9,
+      "file": "assets/stickers/you.png",
+      "enter": "pop",
+      "badges": [
+       {
+        "text": "не нагадуєш",
+        "at": 2,
+        "tone": "info"
+       },
+       {
+        "text": "без простирадла",
+        "at": 5,
+        "tone": "warn"
+       },
+       {
+        "text": "один раз",
+        "at": 7,
+        "tone": "info"
+       }
+      ]
+     }
+    ],
+    "beats": [
+     {
+      "index": 0,
+      "text": "",
+      "start": 0,
+      "end": 1.35,
+      "pose": "explain"
+     },
+     {
+      "index": 1,
+      "text": "",
+      "start": 1.35,
+      "end": 2.9,
+      "pose": "point"
+     },
+     {
+      "index": 2,
+      "text": "",
+      "start": 2.9,
+      "end": 5.3,
+      "pose": "count"
+     }
+    ]
+   },
+   "group": "viewer",
+   "from": [
+    "«пояснюєш щоразу» (e40a7b01) реч.16–19 — you, 4 бейджі, сцени на continues",
+    "«холодні листи» (6d0fcd28) реч.13–15 — letter-open несе три речення"
+   ]
+  },
+  {
+   "id": "pair-side-entry",
+   "title": "Друга особа заходить збоку",
+   "pick": "До того, хто стоїть, заходить нова дійова особа?",
+   "shape": "2 стікери · одна думка",
+   "enter": "перший уже стоїть; другий from-right/left із проскоком",
+   "inside": "перший їде вбік, звільняючи місце, — це і є рух патерну; контраст бейджами: у першого info, у другого warn",
+   "exit": "разом або по черзі",
+   "axes": [
+    "бік входу",
+    "хто несе бейджі",
+    "пігулка на одному"
+   ],
+   "fixed": [
+    "continues: true — на сцені ДРУГОГО і між ними, не на першій"
+   ],
+   "avoid": "другий предмет — ілюстрація того самого: то бейдж",
+   "demo": {
+    "duration": 4.35,
+    "words": [
+     {
+      "word": "Ти",
+      "start": 0.1,
+      "end": 0.3
+     },
+     {
+      "word": "пишеш",
+      "start": 0.35,
+      "end": 0.7
+     },
+     {
+      "word": "сам.",
+      "start": 0.75,
+      "end": 1.15
+     },
+     {
+      "word": "А",
+      "start": 1.6,
+      "end": 1.7
+     },
+     {
+      "word": "робот",
+      "start": 1.85,
+      "end": 2.2,
+      "accent": true
+     },
+     {
+      "word": "шле",
+      "start": 2.25,
+      "end": 2.5
+     },
+     {
+      "word": "за",
+      "start": 2.55,
+      "end": 2.65
+     },
+     {
+      "word": "всіх.",
+      "start": 2.7,
+      "end": 3.8
+     }
+    ],
+    "scenes": [
+     {
+      "from": 0,
+      "to": 2
+     },
+     {
+      "from": 3,
+      "to": 7,
+      "continues": true
+     }
+    ],
+    "stickers": [
+     {
+      "id": "you",
+      "word": 0,
+      "hold": 3.95,
+      "file": "assets/stickers/you.png",
+      "enter": "pop",
+      "label": "ти",
+      "labelTone": "own",
+      "badges": [
+       {
+        "text": "пише сам",
+        "at": 1,
+        "tone": "info"
+       }
+      ]
+     },
+     {
+      "id": "robot-agent",
+      "word": 4,
+      "hold": 2.2,
+      "file": "assets/stickers/robot-agent.png",
+      "enter": "from-right",
+      "badges": [
+       {
+        "text": "×100",
+        "at": 6,
+        "tone": "warn"
+       }
+      ]
+     }
+    ],
+    "beats": [
+     {
+      "index": 0,
+      "text": "",
+      "start": 0,
+      "end": 1.6,
+      "pose": "explain"
+     },
+     {
+      "index": 1,
+      "text": "",
+      "start": 1.6,
+      "end": 4.35,
+      "pose": "stop"
+     }
+    ]
+   },
+   "group": "viewer",
+   "from": [
+    "«холодні листи» (6d0fcd28) реч.4→5 — you стоїть, robot-blast заходить from-right"
+   ]
+  },
+  {
+   "id": "antithesis-two-badges",
+   "title": "Не X, а Y",
+   "pick": "Антитеза в одному реченні?",
+   "shape": "1 стікер-жест · 2 бейджі warn→info",
+   "enter": "pop із проявленням; from-bottom — лише одразу після картки",
+   "inside": "warn на відкинутому, info на взятому, між ними 1.0–1.5 с",
+   "exit": "word+hold або наступний носій",
+   "axes": [
+    "предмет-жест",
+    "enter pop|instant|from-bottom(після картки)",
+    "інтервал 1.0–1.5 с",
+    "пігулка є/немає"
+   ],
+   "fixed": [
+    "порядок тонів warn→info — навпаки перевертає зміст"
+   ],
+   "avoid": "протиставлення несе картка: то card-before-after",
+   "demo": {
+    "duration": 4.15,
+    "words": [
+     {
+      "word": "Не",
+      "start": 0.15,
+      "end": 0.35
+     },
+     {
+      "word": "відправку,",
+      "start": 0.4,
+      "end": 1.0
+     },
+     {
+      "word": "а",
+      "start": 1.7,
+      "end": 1.8
+     },
+     {
+      "word": "підготовку.",
+      "start": 1.95,
+      "end": 3.6,
+      "accent": true
+     }
+    ],
+    "scenes": [
+     {
+      "from": 0,
+      "to": 3
+     }
+    ],
+    "stickers": [
+     {
+      "id": "you-pick",
+      "word": 0,
+      "hold": 3.7,
+      "file": "assets/stickers/you-pick.png",
+      "enter": "pop",
+      "badges": [
+       {
+        "text": "не відправку",
+        "at": 1,
+        "tone": "warn"
+       },
+       {
+        "text": "а підготовку",
+        "at": 3,
+        "tone": "info"
+       }
+      ]
+     }
+    ],
+    "beats": [
+     {
+      "index": 0,
+      "text": "",
+      "start": 0,
+      "end": 1.7,
+      "pose": "present"
+     },
+     {
+      "index": 1,
+      "text": "",
+      "start": 1.7,
+      "end": 4.15,
+      "pose": "stop"
+     }
+    ]
+   },
+   "group": "viewer",
+   "from": [
+    "«холодні листи» (6d0fcd28) реч.9 — you-pick: «не відправку» warn → «а підготовку» info",
+    "«перша програма» (4715d16d) «Друге:» — you-pick from-bottom після картки"
+   ]
+  },
+  {
+   "id": "solo-one-sentence",
+   "title": "Одне висловлювання",
+   "pick": "Одне речення, один предмет, нічого не тягнеться?",
+   "shape": "1 стікер · 1 бейдж · 1.9–3.0 с",
+   "enter": "instant або pop",
+   "inside": "рівно один бейдж, тоном відмінним від сусіда",
+   "exit": "короткий hold — це репліка, не сцена",
+   "axes": [
+    "предмет",
+    "тон бейджа",
+    "enter instant|pop"
+   ],
+   "fixed": [
+    "один бейдж — на другий після гасіння не лишається часу"
+   ],
+   "avoid": "речення продовжує думку: то solo-badge-chain",
+   "demo": {
+    "duration": 3.1,
+    "words": [
+     {
+      "word": "Проблема",
+      "start": 0.1,
+      "end": 0.55
+     },
+     {
+      "word": "не",
+      "start": 0.6,
+      "end": 0.72
+     },
+     {
+      "word": "в",
+      "start": 0.76,
+      "end": 0.84
+     },
+     {
+      "word": "моделі.",
+      "start": 0.88,
+      "end": 2.55,
+      "accent": true
+     }
+    ],
+    "scenes": [
+     {
+      "from": 0,
+      "to": 3
+     }
+    ],
+    "stickers": [
+     {
+      "id": "lightbulb",
+      "word": 0,
+      "hold": 2.7,
+      "file": "assets/stickers/lightbulb.png",
+      "enter": "pop",
+      "badges": [
+       {
+        "text": "не тут",
+        "at": 3,
+        "tone": "warn"
+       }
+      ]
+     }
+    ],
+    "beats": [
+     {
+      "index": 0,
+      "text": "",
+      "start": 0,
+      "end": 3.1,
+      "pose": "thinking"
+     }
+    ]
+   },
+   "group": "solo",
+   "from": [
+    "«пояснюєш щоразу» (e40a7b01) реч.6 «Проблема не в моделі» — один предмет, один бейдж"
+   ]
+  },
+  {
+   "id": "empty-face",
+   "title": "Свідома пауза",
+   "pick": "Питання в лоб, зв'язка чи розворот думки?",
+   "shape": "0 носіїв · поза ведучого + субтитр",
+   "enter": "нічого не заходить — попередній догорів",
+   "inside": "працює лише поза, своя під дію речення",
+   "exit": "наступний носій заходить instant",
+   "axes": [
+    "поза",
+    "довжина паузи 0.5–1.5 с"
+   ],
+   "fixed": [
+    "понад 4 с без події — перевірка сваритиметься по суті"
+   ],
+   "avoid": "будь-де, крім питання, зв'язки і фіналу",
+   "demo": {
+    "duration": 2.2,
+    "words": [
+     {
+      "word": "Знайомо?",
+      "start": 0.3,
+      "end": 0.85,
+      "accent": true
+     }
+    ],
+    "scenes": [
+     {
+      "from": 0,
+      "to": 0
+     }
+    ],
+    "stickers": [],
+    "beats": [
+     {
+      "index": 0,
+      "text": "",
+      "start": 0,
+      "end": 2.2,
+      "pose": "shrug"
+     }
+    ]
+   },
+   "group": "pause",
+   "from": [
+    "«холодні листи» (6d0fcd28) реч.2 «Знайомо?» — 0.5 с порожньо, поза shrug",
+    "«холодні листи» (6d0fcd28) реч.8 «Ось як» — зв'язка перед кроками"
+   ]
+  },
+  {
+   "id": "ring-return",
+   "title": "Кільце: мотив повертається",
+   "pick": "Фінал, що замикає мотив початку?",
+   "shape": "той самий id, що відкривав ролик · бейдж ok",
+   "enter": "pop — «те саме знову», не нова особа",
+   "inside": "картинка та сама, стан інший: зелений тон",
+   "exit": "виходу немає — до останнього кадру",
+   "axes": [
+    "який предмет повертається",
+    "текст бейджа",
+    "lead 0–0.4"
+   ],
+   "fixed": [
+    "зелений тон тут і більше ніде"
+   ],
+   "avoid": "новий предмет на фіналі заборонений взагалі",
+   "demo": {
+    "duration": 3.6,
+    "words": [
+     {
+      "word": "Конвеєр",
+      "start": 0.1,
+      "end": 0.55
+     },
+     {
+      "word": "збирається",
+      "start": 0.6,
+      "end": 1.15
+     },
+     {
+      "word": "за",
+      "start": 1.2,
+      "end": 1.3
+     },
+     {
+      "word": "вечір.",
+      "start": 1.35,
+      "end": 3.05,
+      "accent": true
+     }
+    ],
+    "scenes": [
+     {
+      "from": 0,
+      "to": 3
+     }
+    ],
+    "stickers": [
+     {
+      "id": "app-window",
+      "word": 0,
+      "hold": 3.2,
+      "file": "assets/stickers/app-window.png",
+      "enter": "pop",
+      "badges": [
+       {
+        "text": "за вечір",
+        "at": 3,
+        "tone": "ok"
+       }
+      ]
+     }
+    ],
+    "beats": [
+     {
+      "index": 0,
+      "text": "",
+      "start": 0,
+      "end": 1.2,
+      "pose": "present"
+     },
+     {
+      "index": 1,
+      "text": "",
+      "start": 1.2,
+      "end": 3.6,
+      "pose": "thumbsup"
+     }
+    ]
+   },
+   "group": "solo",
+   "from": [
+    "«сто рілсів» (fe35086f) реч.16 — content-calendar повертається з реч.4 з перевернутим станом",
+    "«перша програма» (4715d16d) фінал — app-window з першої секунди, бейдж ok"
+   ]
+  },
+  {
+   "id": "card-list-reveal",
+   "title": "Перелік карткою",
+   "pick": "Перелік, який називають уголос?",
+   "shape": "1 картка · 3–4 рядки · стікерів нуль",
+   "enter": "0.42 с знизу; керуєш лише словом появи",
+   "inside": "кожен рядок чекає СВОГО слова (data-reveal-at)",
+   "exit": "0.4 с — єдиний носій, чий вихід справді гасне",
+   "axes": [
+    "рядків 3–4 (до 6, якщо пункт ≤ 2 слів)",
+    "підсумок є/немає",
+    "hold до останнього пункту + 0.5"
+   ],
+   "fixed": [
+    "data-reveal-at на кожному рядку — без нього перелік відкриється весь одразу"
+   ],
+   "avoid": "перелік із 1–2 пунктів: то бейджі",
+   "demo": {
+    "duration": 4.9,
+    "words": [
+     {
+      "word": "Що",
+      "start": 0.1,
+      "end": 0.28
+     },
+     {
+      "word": "всередині:",
+      "start": 0.32,
+      "end": 0.8
+     },
+     {
+      "word": "сценарій,",
+      "start": 1.0,
+      "end": 1.55,
+      "accent": true
+     },
+     {
+      "word": "озвучка,",
+      "start": 1.95,
+      "end": 2.5,
+      "accent": true
+     },
+     {
+      "word": "монтаж.",
+      "start": 2.9,
+      "end": 3.45,
+      "accent": true
+     }
+    ],
+    "scenes": [
+     {
+      "from": 0,
+      "to": 4
+     }
+    ],
+    "cards": [
+     {
+      "id": "motion-demo-list",
+      "word": 0,
+      "hold": 4.5,
+      "file": "assets/blocks/motion-demo-list.html"
+     }
+    ],
+    "beats": [
+     {
+      "index": 0,
+      "text": "",
+      "start": 0,
+      "end": 4.9,
+      "pose": "explain"
+     }
+    ]
+   },
+   "group": "cards",
+   "from": [
+    "«пояснюєш щоразу» (e40a7b01) реч.9–12 — картка skill-file, рядки по своїх словах",
+    "«сто рілсів» (fe35086f) реч.1–3 — one-reel-cost"
+   ]
+  },
+  {
+   "id": "card-number",
+   "title": "Число перетворюється",
+   "pick": "Число стає іншим числом?",
+   "shape": "1 картка 2.1–3.4 с · лічильник",
+   "enter": "0.42 с знизу; закреслене стоїть із першого кадру",
+   "inside": "data-count росте з гальмуванням, вирок на своєму слові",
+   "exit": "0.4 с — коротка навмисно",
+   "axes": [
+    "числа",
+    "що закреслене",
+    "hold 2.1–3.4"
+   ],
+   "fixed": [
+    "число в субтитрі жовтим НЕ підсвічувати — його вже несе картка"
+   ],
+   "avoid": "число не міняється, а просто називається: бейдж",
+   "demo": {
+    "duration": 3.8,
+    "words": [
+     {
+      "word": "Сто",
+      "start": 0.1,
+      "end": 0.45
+     },
+     {
+      "word": "листів",
+      "start": 0.5,
+      "end": 0.9
+     },
+     {
+      "word": "замість",
+      "start": 0.95,
+      "end": 1.35
+     },
+     {
+      "word": "десяти.",
+      "start": 1.4,
+      "end": 1.95,
+      "accent": true
+     }
+    ],
+    "scenes": [
+     {
+      "from": 0,
+      "to": 3
+     }
+    ],
+    "cards": [
+     {
+      "id": "motion-demo-count",
+      "word": 0,
+      "hold": 3.4,
+      "file": "assets/blocks/motion-demo-count.html"
+     }
+    ],
+    "beats": [
+     {
+      "index": 0,
+      "text": "",
+      "start": 0,
+      "end": 3.8,
+      "pose": "facepalm"
+     }
+    ]
+   },
+   "group": "cards",
+   "from": [
+    "«холодні листи» (6d0fcd28) реч.6 — hundred-vs-ten: лічильник 0→100, вирок знизу",
+    "«холодні листи» (6d0fcd28) реч.10 — twenty-not-two-hundred: закреслене 200"
+   ]
+  },
+  {
+   "id": "steps-one-card",
+   "title": "Три кроки одним списком",
+   "pick": "Три кроки, кожен зводиться до рядка?",
+   "shape": "1 картка на 3 речення · пози-пальці",
+   "enter": "картка на слові «Перше:»",
+   "inside": "рядок на слові маркера; пози point → count → count-three",
+   "exit": "догорає на word+hold (≈9 с)",
+   "axes": [
+    "тексти кроків",
+    "пози — три різні",
+    "hold"
+   ],
+   "fixed": [
+    "три різні пози — повтор читається як зациклений кадр"
+   ],
+   "avoid": "кроки різнорідні: то steps-alternating",
+   "demo": {
+    "duration": 6.1,
+    "words": [
+     {
+      "word": "Перше:",
+      "start": 0.1,
+      "end": 0.5,
+      "accent": true
+     },
+     {
+      "word": "сценарій.",
+      "start": 0.55,
+      "end": 1.1
+     },
+     {
+      "word": "Друге:",
+      "start": 1.9,
+      "end": 2.3,
+      "accent": true
+     },
+     {
+      "word": "голос.",
+      "start": 2.35,
+      "end": 2.8
+     },
+     {
+      "word": "Третє:",
+      "start": 3.7,
+      "end": 4.1,
+      "accent": true
+     },
+     {
+      "word": "рендер.",
+      "start": 4.15,
+      "end": 4.7
+     }
+    ],
+    "scenes": [
+     {
+      "from": 0,
+      "to": 1
+     },
+     {
+      "from": 2,
+      "to": 3,
+      "continues": true
+     },
+     {
+      "from": 4,
+      "to": 5,
+      "continues": true
+     }
+    ],
+    "cards": [
+     {
+      "id": "motion-demo-steps",
+      "word": 0,
+      "hold": 5.7,
+      "file": "assets/blocks/motion-demo-steps.html"
+     }
+    ],
+    "beats": [
+     {
+      "index": 0,
+      "text": "",
+      "start": 0,
+      "end": 1.9,
+      "pose": "point"
+     },
+     {
+      "index": 1,
+      "text": "",
+      "start": 1.9,
+      "end": 3.7,
+      "pose": "count"
+     },
+     {
+      "index": 2,
+      "text": "",
+      "start": 3.7,
+      "end": 6.1,
+      "pose": "count-three"
+     }
+    ]
+   },
+   "group": "cards",
+   "from": [
+    "«сто рілсів» (fe35086f) реч.7–9 — pipeline-steps, пози point/count/count-three"
+   ]
+  },
+  {
+   "id": "card-before-after",
+   "title": "Було / стало",
+   "pick": "Два стани поруч одним кадром?",
+   "shape": "1 картка · дві колонки",
+   "enter": "знизу; колонка «було» стоїть із першого кадру",
+   "inside": "«стало» відкривається на своєму слові",
+   "exit": "0.4 с",
+   "axes": [
+    "що в колонках",
+    "слово розкриття",
+    "hold 2.5–4"
+   ],
+   "fixed": [
+    "стікери в цьому кадрі неможливі — картка їх витісняє"
+   ],
+   "demo": {
+    "duration": 3.95,
+    "words": [
+     {
+      "word": "Було",
+      "start": 0.1,
+      "end": 0.45
+     },
+     {
+      "word": "пів",
+      "start": 0.5,
+      "end": 0.68
+     },
+     {
+      "word": "дня,",
+      "start": 0.72,
+      "end": 1.05
+     },
+     {
+      "word": "стало",
+      "start": 1.35,
+      "end": 1.7,
+      "accent": true
+     },
+     {
+      "word": "п'ять",
+      "start": 1.75,
+      "end": 2.0
+     },
+     {
+      "word": "хвилин.",
+      "start": 2.05,
+      "end": 2.55
+     }
+    ],
+    "scenes": [
+     {
+      "from": 0,
+      "to": 5
+     }
+    ],
+    "cards": [
+     {
+      "id": "motion-demo-before",
+      "word": 0,
+      "hold": 3.55,
+      "file": "assets/blocks/motion-demo-before.html"
+     }
+    ],
+    "beats": [
+     {
+      "index": 0,
+      "text": "",
+      "start": 0,
+      "end": 1.35,
+      "pose": "present"
+     },
+     {
+      "index": 1,
+      "text": "",
+      "start": 1.35,
+      "end": 3.95,
+      "pose": "thumbsup"
+     }
+    ]
+   },
+   "group": "cards",
+   "from": [
+    "«сто рілсів» (fe35086f) — half-day-to-five: «пів дня» закреслено, «5 хв» на своєму слові"
+   ]
+  },
+  {
+   "id": "steps-alternating",
+   "title": "Кроки з чергуванням",
+   "pick": "Три кроки, кожен зі своїм змістом і картинкою?",
+   "shape": "картка → стікер → картка",
+   "enter": "кожен крок — новий носій на маркерному слові",
+   "inside": "чергування обов'язкове: три стікери підряд — карусель",
+   "exit": "стікерний крок ріже наступний маркер, картковий — свій hold",
+   "axes": [
+    "порядок чергування",
+    "що на якому кроці"
+   ],
+   "fixed": [
+    "бейджі лише на стікерних кроках"
+   ],
+   "avoid": "кроки однорідні й короткі: то steps-one-card",
+   "demo": {
+    "duration": 6.7,
+    "words": [
+     {
+      "word": "Перше:",
+      "start": 0.1,
+      "end": 0.5,
+      "accent": true
+     },
+     {
+      "word": "план.",
+      "start": 0.55,
+      "end": 1.0
+     },
+     {
+      "word": "Друге:",
+      "start": 2.3,
+      "end": 2.7,
+      "accent": true
+     },
+     {
+      "word": "робот.",
+      "start": 2.75,
+      "end": 4.0
+     },
+     {
+      "word": "Третє:",
+      "start": 4.5,
+      "end": 4.9,
+      "accent": true
+     },
+     {
+      "word": "рахунок.",
+      "start": 4.95,
+      "end": 5.8
+     }
+    ],
+    "scenes": [
+     {
+      "from": 0,
+      "to": 1
+     },
+     {
+      "from": 2,
+      "to": 3
+     },
+     {
+      "from": 4,
+      "to": 5
+     }
+    ],
+    "stickers": [
+     {
+      "id": "robot-agent",
+      "word": 2,
+      "hold": 1.95,
+      "file": "assets/stickers/robot-agent.png",
+      "enter": "pop",
+      "badges": [
+       {
+        "text": "шле сам",
+        "at": 3,
+        "tone": "info"
+       }
+      ]
+     }
+    ],
+    "cards": [
+     {
+      "id": "motion-demo-list",
+      "word": 0,
+      "hold": 2.0,
+      "file": "assets/blocks/motion-demo-list.html"
+     },
+     {
+      "id": "motion-demo-count",
+      "word": 4,
+      "hold": 1.9,
+      "file": "assets/blocks/motion-demo-count.html"
+     }
+    ],
+    "beats": [
+     {
+      "index": 0,
+      "text": "",
+      "start": 0,
+      "end": 2.3,
+      "pose": "point"
+     },
+     {
+      "index": 1,
+      "text": "",
+      "start": 2.3,
+      "end": 4.5,
+      "pose": "count"
+     },
+     {
+      "index": 2,
+      "text": "",
+      "start": 4.5,
+      "end": 6.7,
+      "pose": "count-three"
+     }
+    ]
+   },
+   "group": "cards",
+   "from": [
+    "«холодні листи» (6d0fcd28) реч.10–15 — картка → robot-search → fact-examples → letter-open"
+   ]
+  }
+ ]
+}

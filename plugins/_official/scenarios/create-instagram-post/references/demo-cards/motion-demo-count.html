@@ -1,0 +1,47 @@
+<style>
+  .mdc {
+    box-sizing: border-box;
+    width: 780px;
+    margin: 0 auto;
+    padding: 38px 44px 42px;
+    background: linear-gradient(180deg, #FFFFFF, #F6F6F3);
+    border-radius: 30px;
+    box-shadow: 0 20px 52px rgba(17, 17, 17, .16);
+    font-family: Arial, Helvetica, sans-serif;
+    color: #111111;
+    text-align: center;
+  }
+
+  .mdc__num {
+    font-size: 150px;
+    font-weight: 900;
+    line-height: 1;
+    color: #D92D20;
+  }
+
+  .mdc__cap {
+    margin-top: 8px;
+    font-size: 40px;
+    font-weight: 700;
+    color: #6B6B6B;
+  }
+
+  .mdc__verdict {
+    margin-top: 20px;
+    padding: 12px 26px;
+    display: inline-block;
+    border-radius: 999px;
+    background: #111111;
+    color: #FFFFFF;
+    font-size: 44px;
+    font-weight: 700;
+    visibility: hidden;
+  }
+
+  .mdc__verdict.is-shown { visibility: visible; }
+</style>
+<div class="mdc">
+  <div class="mdc__num" data-count="100" data-count-from="0">0</div>
+  <div class="mdc__cap">однакових листів</div>
+  <div class="mdc__verdict" data-reveal data-reveal-at="3">замість 10 живих</div>
+</div>

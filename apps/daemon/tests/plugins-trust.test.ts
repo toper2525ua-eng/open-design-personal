@@ -16,9 +16,11 @@ import { migratePlugins } from '../src/plugins/persistence.js';
 import {
   defaultCapabilities,
   grantCapabilities,
+  resolveCapabilitiesGranted,
   revokeCapabilities,
   validateCapabilityList,
 } from '../src/plugins/trust.js';
+import type { PluginManifest } from '@open-design/contracts';
 
 let db: Database.Database;
 let tmpDir: string;
@@ -158,5 +160,51 @@ describe('grantCapabilities / revokeCapabilities', () => {
     expect(() =>
       grantCapabilities({ db, pluginId: 'does-not-exist', capabilities: ['fs:read'] }),
     ).toThrow(/plugin not found/);
+  });
+});
+
+
+/*
+ * Правка форку: вкладений плагін отримує права, оголошені в маніфесті.
+ *
+ * Плагін студії роликів просить `fs:write` і `subprocess` — без них він
+ * підсовує текст скіла, але не пише post.json і не запускає render.py.
+ * Доти будь-який вкладений отримував рівно `prompt:inject`, і в образі
+ * програми такий плагін їхав мертвим МОВЧКИ: жодної помилки, просто
+ * нічого не працює.
+ */
+describe('resolveCapabilitiesGranted — вкладені плагіни', () => {
+  const manifest = {
+    specVersion: '1.0.0',
+    name: 'create-instagram-post',
+    version: '0.1.0',
+    od: { capabilities: ['prompt:inject', 'fs:write', 'subprocess'] },
+  } as unknown as PluginManifest;
+
+  it('вкладений бере права з маніфесту', () => {
+    const caps = resolveCapabilitiesGranted({ manifest, trust: 'bundled' });
+    expect(caps).toContain('fs:write');
+    expect(caps).toContain('subprocess');
+    expect(caps).toContain('prompt:inject');
+  });
+
+  it('але НЕ бере широких типових прав `trusted`', () => {
+    // Межа зумисна: вкладений має менше, ніж поставлений локально.
+    const caps = resolveCapabilitiesGranted({ manifest, trust: 'bundled' });
+    expect(caps).not.toContain('mcp:*');
+    expect(caps).not.toContain('connector:*');
+    expect(caps).not.toContain('genui:*');
+  });
+
+  it('обмежений так і лишається з одним `prompt:inject`', () => {
+    // Чужий код із мережі правило не зачіпає.
+    const caps = resolveCapabilitiesGranted({ manifest, trust: 'restricted' });
+    expect(caps).toEqual(['prompt:inject']);
+  });
+
+  it('локальний і далі бере і маніфест, і типові права', () => {
+    const caps = resolveCapabilitiesGranted({ manifest, trust: 'trusted' });
+    expect(caps).toContain('fs:write');
+    expect(caps).toContain('mcp:*');
   });
 });

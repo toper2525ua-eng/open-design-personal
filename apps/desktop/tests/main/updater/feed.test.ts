@@ -7,7 +7,7 @@ import { SIDECAR_SOURCES } from "@open-design/sidecar-proto";
 import { describe, expect, it } from "vitest";
 
 import { resolveDesktopUpdaterConfig } from "../../../src/main/updater/config.js";
-import { compareVersions, resolveInstalledOuterVersion } from "../../../src/main/updater/feed.js";
+import { compareVersions, resolveInstalledOuterVersion, selectUpdateCandidate } from "../../../src/main/updater/feed.js";
 
 function makeRoot(): string {
   return mkdtempSync(join(tmpdir(), "od-updater-feed-test-"));
@@ -64,5 +64,81 @@ describe("desktop updater feed", () => {
     expect(compareVersions("1.0.0-prerelease.10", "1.0.0-prerelease.2")).toBe(1);
     expect(compareVersions("1.0.0", "1.0.0-beta.9")).toBe(1);
     expect(compareVersions("1.0.0-beta.1", "1.0.0")).toBe(-1);
+  });
+});
+
+
+/*
+ * ПРАВКА ФОРКУ. Стрічка, яку пише `scripts/release-personal.mjs`, мусить
+ * прийматись самим апдейтером — інакше реліз виглядає опублікованим, а
+ * жодна встановлена копія його не бачить.
+ *
+ * Це не «схоже на правильне»: фікстура тут — точна форма з того
+ * скрипта, і згодовується вона справжньому споживачу. Розійдеться
+ * контракт в апстрімі — тест почервоніє, і скрипт треба буде правити.
+ */
+describe("стрічка особистих релізів", () => {
+  const version = "0.18.0";
+  const asset = `open-design-${version}-win-x64-setup.exe`;
+  const feed = {
+    channel: "stable",
+    releaseVersion: version,
+    stableVersion: version,
+    platforms: {
+      win: {
+        enabled: true,
+        arch: "x64",
+        artifacts: {
+          installer: {
+            url: `https://github.com/toper2525ua-eng/open-design-personal/releases/download/v${version}/${asset}`,
+            name: asset,
+            size: 319_900_518,
+            sha256: "2289702ec05eada4cda24fc430cc70c1b73c1eb435ae99015ab217045158547c",
+          },
+        },
+      },
+    },
+  } as Record<string, unknown>;
+
+  const winConfig = () =>
+    resolveDesktopUpdaterConfig({
+      appVersion: "0.16.1",
+      arch: "x64",
+      env: {},
+      platform: "win32",
+      source: SIDECAR_SOURCES.PACKAGED,
+    });
+
+  it("апдейтер бере з неї кандидата на оновлення", () => {
+    const picked = selectUpdateCandidate(feed, winConfig());
+    expect(picked.ok).toBe(true);
+    if (!picked.ok) return;
+    expect(picked.candidate.version).toBe(version);
+    expect(picked.candidate.platformKey).toBe("win");
+    expect(picked.candidate.artifact.type).toBe("installer");
+    expect(picked.candidate.artifact.url).toContain(asset);
+    expect(picked.candidate.checksum.algorithm).toBe("sha256");
+  });
+
+  it("без `enabled: true` платформа відкидається — і мовчки", () => {
+    // Найлегша помилка в стрічці: усе на місці, а оновлення не їде.
+    const broken = structuredClone(feed) as typeof feed;
+    delete ((broken.platforms as Record<string, Record<string, unknown>>).win).enabled;
+    const picked = selectUpdateCandidate(broken, winConfig());
+    expect(picked.ok).toBe(false);
+    if (picked.ok) return;
+    expect(picked.error.code).toBe("no-compatible-artifact");
+  });
+
+  it("ключ платформи саме `win`, не `win32-x64`", () => {
+    const broken = structuredClone(feed) as typeof feed;
+    const platforms = broken.platforms as Record<string, unknown>;
+    platforms["win32-x64"] = platforms.win;
+    delete platforms.win;
+    expect(selectUpdateCandidate(broken, winConfig()).ok).toBe(false);
+  });
+
+  it("нова версія вважається новішою за встановлену", () => {
+    expect(compareVersions(version, "0.16.1")).toBeGreaterThan(0);
   });
 });
