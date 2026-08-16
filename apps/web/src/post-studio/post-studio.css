@@ -15,7 +15,12 @@
   height: 100%;
   min-height: 0;
   background: var(--bg-app);
+  /* Точка відліку для шторок. Без неї вони рахуються від вікна і
+     виїжджають на панель чату — накривають те, до чого не мають
+     стосунку. */
+  position: relative;
 }
+
 
 .post-ws__bar {
   display: flex;
@@ -43,7 +48,10 @@
 
 .post-ws__body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  /* Кадр праворуч сталої ширини, центр забирає решту: саме центр росте
+     разом із вікном, бо кадр більшим за свої 300 px не стає. Чат при
+     цьому лишається крайнім лівим — його ставить розкладка проєкту. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 320px);
   gap: 16px;
   padding: 16px;
   overflow-y: auto;
@@ -51,9 +59,861 @@
   flex: 1;
 }
 
+/* Порядок у розмітці лишився «кадр, потім центр» — переставляємо тут,
+   щоб не тягати великий блок кадру по файлу. */
+.post-ws__stage { order: 2; }
+.post-ws__center { order: 1; }
+
 @media (max-width: 1100px) {
   .post-ws__body { grid-template-columns: minmax(0, 1fr); }
 }
+
+.post-ws__center {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* Смуга етапів: увесь шлях ролика в один ряд. Саме ряд, а не список —
+   так видно, скільки лишилось, а не тільки де стоїш. */
+.post-ws__stages {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.post-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.post-stage__box {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  max-width: 56px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--bg-panel);
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.post-stage__title {
+  font-size: 12px;
+  color: var(--text-soft);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Пройдений крок тьмяніє: він уже не потребує уваги. Замість номера —
+   галочка: цифра пройденого кроку нічого не додає. */
+.post-stage.is-done .post-stage__box {
+  color: #28c840;
+  font-size: 15px;
+}
+
+.post-stage.is-done .post-stage__box::after { content: '✓'; }
+.post-stage.is-done .post-stage__box { font-size: 0; }
+.post-stage.is-done .post-stage__box::after { font-size: 15px; }
+
+/* Поточний — єдиний виділений. Коли підсвічено кілька, зникає сама
+   відповідь на питання «де ми зараз». */
+.post-stage.is-current .post-stage__box {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.post-stage.is-current .post-stage__title {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.post-stage.is-wait { opacity: 0.6; }
+
+/* --- конструктор анімацій --- */
+
+/* Панель-список у центрі: розгорнув — клікаєш рухи, вони грають у
+   великому кадрі праворуч. Обмежена власним скролом, щоб кнопки внизу
+   колонки лишались на екрані. */
+.post-ws__motions {
+  order: 2;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--bg-panel);
+  min-height: 0;
+}
+
+.post-motions__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.post-motions__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.post-motions__hint {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-soft);
+}
+
+.post-motions__empty {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.post-motions__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 6px 8px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.post-motions__bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 0 6px 6px;
+}
+
+.post-motion { border-radius: 10px; }
+.post-motion.is-on { background: var(--bg-elevated); }
+
+.post-motion__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  border-radius: 10px;
+}
+
+.post-motion__row:hover { background: var(--bg-elevated); }
+
+.post-motion__play {
+  flex: 0 0 16px;
+  font-size: 10px;
+  color: var(--text-soft);
+}
+
+.post-motion.is-on .post-motion__play { color: var(--text-strong); }
+
+.post-motion__name {
+  font-size: 12.5px;
+  color: var(--text-strong);
+  white-space: nowrap;
+}
+
+.post-motion__pick {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.post-motion__detail {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 2px 10px 10px 32px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-soft);
+}
+
+.post-motion__detail b { color: var(--text-strong); font-weight: 600; }
+.post-motion__detail .btn { align-self: flex-start; margin-top: 4px; }
+
+/* --- сторінка-галерея --- */
+
+.post-gallery {
+  position: absolute;
+  inset: 0;
+  z-index: 65;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-app, #fff);
+}
+
+.post-gallery__bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+  /* Вкладки з пошуком переносяться на другий рядок, і без цього
+     сітка каталогу лягала поверх них: кнопка «За зірки» була видима,
+     але клік перехоплювала сітка. */
+  flex-wrap: wrap;
+  position: relative;
+  z-index: 1;
+}
+
+.post-gallery__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.post-gallery__groups {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.post-gallery__group {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* Каталог подарунків: сітка статичних прев'ю. Анімацію свідомо НЕ
+   граємо в сітці — 165 lottie одночасно кладуть браузер; вона
+   приїжджає в ролик спрайтом по кнопці «Взяти». */
+.post-gifts__search {
+  padding: 5px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+  min-width: 180px;
+}
+
+.post-gifts__note {
+  padding: 8px 16px 0;
+  max-width: 760px;
+  line-height: 1.5;
+}
+
+.post-gifts__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 14px;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.post-gifts__cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 10px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 16px;
+  background: var(--surface-soft, rgba(0, 0, 0, 0.02));
+}
+
+.post-gifts__cell img {
+  width: 92px;
+  height: 92px;
+  object-fit: contain;
+}
+
+/* Вкладка «Фони NFT»: ліворуч набори, праворуч живе прев'ю картки. */
+.post-nft {
+  display: flex;
+  gap: 20px;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.post-nft__side { flex: 1 1 auto; min-width: 0; }
+
+.post-nft__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 8px 0 18px;
+}
+
+.post-nft__chip {
+  border: 2px solid transparent;
+  border-radius: 12px;
+  padding: 14px 10px;
+  cursor: pointer;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .45);
+  text-align: left;
+}
+
+.post-nft__chip.is-on { border-color: var(--accent-btn-color, #2aabee); }
+
+.post-nft__syms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.post-nft__sym {
+  width: 46px;
+  height: 46px;
+  border: 2px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  cursor: pointer;
+  color: var(--text-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.post-nft__sym.is-on { border-color: var(--accent-btn-color, #2aabee); }
+.post-nft__sym img { width: 30px; height: 30px; object-fit: contain; }
+
+.post-nft__preview {
+  flex: 0 0 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow: visible;
+  padding: 12px 12px 0 0;
+}
+
+/* Пропорції й деталі — ті самі, що в блоці ролика (див. nft-card у
+   routes/project/render.ts): вертикальна картка, дуже круглі кути,
+   щільна стрічка. Прев'ю мусить збігатися з тим, що поїде в кадр. */
+/* Прев'ю картки — за мобільним клієнтом Telegram (1 dp = 2 px);
+   розміри й позиції задаються інлайново з констант post-spec.ts. */
+.post-nft__wrap {
+  position: relative;
+  overflow: visible;
+  margin: 8px 8px 0 0;
+  font-family: Roboto, "Segoe UI", Arial, Helvetica, sans-serif;
+}
+
+.post-nft__card {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .18);
+}
+
+.post-nft__glyph {
+  position: absolute;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+.post-nft__slot {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed rgba(255, 255, 255, .5);
+  border-radius: 14px;
+  color: rgba(255, 255, 255, .85);
+  font-size: 11px;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.post-nft__price {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  border-radius: 9999px;
+  color: #fff;
+  line-height: 1;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  z-index: 2;
+}
+
+.post-nft__price svg { fill: #fff; }
+
+.post-nft__form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.post-nft__form label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.post-nft__form input {
+  flex: 1;
+  padding: 5px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+}
+
+/* Картинка-кнопка: відкриває другий рівень — моделі подарунка. */
+.post-gifts__open {
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 12px;
+}
+
+.post-gifts__open:hover {
+  background: rgba(42, 171, 238, 0.08);
+}
+
+/* Підменю моделей — поверх сітки каталогу. */
+.post-gifts__variants {
+  z-index: 66;
+}
+
+.post-gifts__name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+  text-align: center;
+  line-height: 1.3;
+}
+
+/* Призначення — дрібним і в два рядки: сітка лишається сіткою
+   картинок, але відповідає на «що взяти під цю фразу». */
+.post-gifts__use {
+  font-size: 10px;
+  color: var(--text-soft);
+  text-align: center;
+  line-height: 1.35;
+  min-height: 2.7em;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.post-gallery__group i {
+  font-style: normal;
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.post-gallery__group:hover { border-color: var(--border-strong); }
+
+.post-gallery__group.is-on {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.post-gallery__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 14px;
+  padding: 16px;
+  overflow-y: auto;
+  align-content: start;
+}
+
+/* Блок сітки — одна кнопка: квадратна сцена + назва. */
+.post-gcard {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  background: var(--bg-panel);
+  min-width: 0;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s ease-out;
+}
+
+.post-gcard:hover { border-color: var(--border-strong); }
+
+/* Квадратне вікно сцени: всередині живе повний кадр 9:16, а вікно
+   показує його верх — зону стікерів. Ведучий і субтитри в мініатюрі
+   вимкнені пропом, тож нижня частина кадру порожня і не потрібна. */
+.post-gcard__scene {
+  display: block;
+  position: relative;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: 10px;
+}
+
+.post-gcard__scene /* Пауза: повний кадр 9:16, вписаний у квадратне вікно по висоті. */
+.post-gcard__scene.is-full { background: var(--bg-muted); }
+
+.post-gcard__scene.is-full .post-mini__frame {
+  width: auto;
+  height: 100%;
+  aspect-ratio: 9 / 16;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.post-mini__frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  border-radius: 10px;
+}
+
+.post-mini__frame {
+  width: 100%;
+  max-width: none;
+}
+
+/* Пелена шва петлі: накриває вміст кольором тла, фон не блимає. */
+.post-mini__seam {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.post-gcard__none {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 20px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-soft);
+  background: var(--bg-muted);
+  border-radius: 10px;
+}
+
+.post-gcard__name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.post-gcard__pick {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-soft);
+}
+
+.post-gcard--plus {
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 230px;
+  border-style: dashed;
+  border-color: var(--border-strong);
+  background: none;
+  text-align: center;
+}
+
+.post-gcard--plus:hover { background: var(--bg-panel); }
+
+.post-gcard__plus {
+  font-size: 44px;
+  line-height: 1;
+  color: var(--text-soft);
+}
+
+/* --- модал руху поверх галереї --- */
+
+.post-gmodal {
+  position: absolute;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.post-gmodal__scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.post-gmodal__body {
+  position: relative;
+  display: flex;
+  gap: 18px;
+  padding: 16px;
+  max-width: 720px;
+  max-height: 92%;
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  background: var(--bg-app, #fff);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.25);
+}
+
+/* Кадр модалу — повний, 9:16, з ведучим і субтитрами. */
+.post-gmodal__frame { flex: 0 0 280px; }
+.post-gmodal__frame .post-mini__frame { max-width: 280px; }
+
+.post-gmodal__side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 240px;
+  max-width: 340px;
+  overflow-y: auto;
+}
+
+.post-gmodal__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.post-gmodal__side .post-motion__detail { padding: 0; }
+
+.post-gmodal__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 10px;
+}
+
+/* Другий клік — уже підтвердження, і кнопка каже про це кольором. */
+.post-gmodal__del.is-armed {
+  background: #d92d20;
+  border-color: #d92d20;
+  color: #fff;
+}
+
+/* Рядок прев'ю під кадром — займає місце скраба. */
+.post-ws__preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 300px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  font-size: 11px;
+  color: var(--text-soft);
+}
+
+.post-ws__preview-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #28c840;
+  /* Пульс каже «живе», навіть коли рух у демо тонкий. */
+  animation: post-preview-pulse 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes post-preview-pulse {
+  from { opacity: 1; }
+  to { opacity: 0.35; }
+}
+
+.post-ws__preview-name {
+  flex: 1;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.post-ws__preview-time { font-variant-numeric: tabular-nums; }
+
+/* Місце під живий стан роботи агента. Поки порожнє — і це навмисно. */
+.post-ws__center-free {
+  flex: 1;
+  min-height: 120px;
+  order: 2;
+}
+
+.post-ws__stages { order: 1; }
+
+/* Дії — внизу колонки. Тонули вони не через місце, а через стрічку
+   субтитрів, що розганяла скрол; відколи вона згорнута в рядок,
+   низ знову доступний без прокрутки. */
+.post-ws__actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  order: 3;
+}
+
+.post-act {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 10px 12px;
+  min-width: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  color: var(--text-strong);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s ease-out, background 0.12s ease-out;
+}
+
+.post-act:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+}
+
+.post-act:disabled { opacity: 0.45; cursor: default; }
+
+/* Рендер — головна дія, і єдина з акцентом: коли виділені всі, не
+   виділений жоден. */
+.post-act.is-primary {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+}
+
+.post-act.is-primary .post-act__label { font-weight: 600; }
+
+.post-act__label {
+  font-size: 13px;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.post-act__hint {
+  font-size: 11px;
+  color: var(--text-soft);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- віконце прискорення --- */
+
+/* Прив'язка поповера: він висить над самим множником, а не посеред
+   екрана. Налаштування дрібне, і вести до нього через півекранну
+   шторку — більше руху, ніж самої дії. */
+.post-ws__rate-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Прозора підкладка, що ловить клік повз віконце. */
+.post-pop__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+}
+
+.post-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  z-index: 81;
+  width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--bg-app, #fff);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+}
+
+.post-pop__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.post-pop__head b {
+  font-size: 18px;
+  color: var(--text-strong);
+}
+
+.post-pop__head span {
+  font-size: 11px;
+  color: var(--text-soft);
+}
+
+.post-pop__range { width: 100%; }
+
+.post-pop__scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-soft);
+}
+
+/*
+ * Чернетка більше не переставляє екран.
+ *
+ * Доти вона ховала кадр і виносила сценарій на середину — бо порожній
+ * кадр займав пів екрана й нічого не показував. Відколи кадр став
+ * вузькою колонкою збоку, а робота перейшла в чат, ця проблема зникла
+ * сама, і другий варіант розкладки лишався б зайвим станом, який треба
+ * тримати в голові. Від режиму лишилось одне: сценарій у панелі ручних
+ * правок відкритий сам (`blockShell`), бо до заливки доріжки це єдине,
+ * що там можна робити руками.
+ *
+ * Місця під текст більше — воно тут головне робоче поле.
+ */
+.post-ws__body.is-draft:not(.is-shot) .post-block__script { min-height: 280px; }
 
 /* Режим зйомки (?shot=1): кадр іде поверх усього, а решта інтерфейсу
    закривається суцільною підкладкою. Так знімальнику не треба знати
@@ -70,6 +930,14 @@ html.post-shot body * { visibility: hidden; }
 
 html.post-shot .post-ws__frame,
 html.post-shot .post-ws__frame * { visibility: visible; }
+
+/* Виняток для карток. Рядок картки ховається саме `visibility: hidden`
+   (стан, а не перехід: кадр знімається одразу після setTime), і правило
+   вище перебивало його специфічністю — у прев'ю картка відкривалась по
+   словах, а в mp4 стояла розкрита з першого кадру. Розходження превʼю і
+   рендеру помітно аж у готовому файлі, тому виняток тут, а не в кожній
+   картці: інакше кожен новий блок наступав би на ті самі граблі. */
+html.post-shot .post-ws__card-in [data-reveal]:not(.is-shown) { visibility: hidden; }
 
 html.post-shot .post-ws__frame {
   position: fixed;
@@ -250,54 +1118,35 @@ html.post-shot .post-ws__frame {
  * миті, коли фігура стає плоскою, від неї лишається чверть, і крізь
  * неї видно сітку.
  */
-@keyframes post-ws-host-out {
-  0% {
-    opacity: 1;
-    filter: contrast(1) brightness(1) drop-shadow(0 12px 32px rgba(0, 0, 0, 0.18));
-  }
-  26% {
-    opacity: 0.5;
-    filter: contrast(0.45) brightness(1.5) drop-shadow(0 12px 32px rgba(0, 0, 0, 0.04));
-  }
-  48% {
-    opacity: 0;
-    filter: contrast(0) brightness(2) drop-shadow(0 12px 32px rgba(0, 0, 0, 0));
-  }
-  100% {
-    opacity: 0;
-    filter: contrast(0) brightness(2) drop-shadow(0 12px 32px rgba(0, 0, 0, 0));
-  }
+/*
+ * Зміна пози — симетричний кросфейд: стара гасне рівно в такт із
+ * проявленням нової, одна крива на обох.
+ *
+ * Історія у два кроки. Спершу було «через світло» — стара йшла в
+ * brightness(2), і кадр блимав білим. Потім нова проявлялась ПОВЕРХ
+ * нерухомої старої — без білого, але на піку переходу стара стирчала
+ * з-під напівпрозорої нової, і зміна читалась як два персонажі разом.
+ * Тепер обидві течуть одночасно: сумарна щільність тримається ~1 весь
+ * перехід (пози майже збігаються силуетом), тож ні спалаху, ні привида.
+ */
+@keyframes post-ws-host-swap-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
 }
 
-/* Нова чекає, поки старої не стане, і аж тоді заходить. Позначка 48 % —
-   та сама, на якій стара доходить до нуля: у мить появи нової
-   попередньої в кадрі вже немає жодного відсотка. */
 @keyframes post-ws-host-swap-in {
-  0% {
-    opacity: 0;
-    transform: scale(0.99);
-  }
-  48% {
-    opacity: 0;
-  }
-  72% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .post-ws__host-shot.is-out {
-  animation: post-ws-host-out 0.22s ease-out both;
-  will-change: opacity, filter;
+  animation: post-ws-host-swap-out 0.22s ease-in-out both;
+  will-change: opacity;
 }
 
 .post-ws__host-shot.is-swap {
-  animation: post-ws-host-swap-in 0.22s ease-out both;
-  will-change: transform, opacity;
+  animation: post-ws-host-swap-in 0.22s ease-in-out both;
+  will-change: opacity;
 }
 
 /*
@@ -439,6 +1288,25 @@ html.post-shot .post-ws__frame {
   transform-origin: top center;
 }
 
+/* Шар стікера-наліпки НА картці: та сама система координат (1080 px,
+   origin top center, той самий transform), тож наліпка стоїть точно на
+   краю картки при будь-якій ширині превʼю. */
+.post-ws__card-fx {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 1080px;
+  height: 0;
+  transform-origin: top center;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.post-ws__card-fx img {
+  position: absolute;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.18));
+}
+
 @keyframes post-ws-card-in {
   from {
     opacity: 0;
@@ -470,7 +1338,8 @@ html.post-shot .post-ws__frame {
    анімація дрейфу перебивала б transition зникнення. */
 .post-ws__sticker {
   position: absolute;
-  aspect-ratio: 1;
+  /* Висоту задає кадр, а не пропорція: квадрат одиночного предмета вищий
+     за відведену зону, і коробку доводиться підрізати згори. */
   pointer-events: none;
   /* left і width анімуються навмисно: коли поруч стає наступний стікер,
      попередні РОЗʼЇЖДЖАЮТЬСЯ, звільняючи місце, а не стрибають у нову
@@ -484,16 +1353,107 @@ html.post-shot .post-ws__frame {
   /* Вхід, удар на акцентному слові і стиск на виході — усе числами з
      кадру, а не переходом: перехід памʼятає, звідки їхав, і при
      перемотці показував би не те, що на цій секунді насправді. Тому
-     transform свідомо ВИНЯТИЙ зі списку переходів вище. */
+     transform свідомо ВИНЯТИЙ зі списку переходів вище.
+
+     Нові осі ефектів (--fx-*) з нейтральними дефолтами: 0deg/1 — no-op,
+     тож старі входи-виходи малюються байт-у-байт як раніше. perspective
+     потрібен flip-ефектам: без нього rotateY — плоске стискання по X,
+     а не розворот у глибину. */
   transform:
     translate(var(--enter-x, 0), var(--enter-y, 0))
-    scale(calc((1 + var(--punch, 0)) * var(--enter-scale, 1)));
+    perspective(620px)
+    rotateY(var(--fx-ry, 0deg))
+    rotate(var(--fx-rot, 0deg))
+    scale(
+      calc((1 + var(--punch, 0)) * var(--enter-scale, 1) * var(--fx-sx, 1)),
+      calc((1 + var(--punch, 0)) * var(--enter-scale, 1) * var(--fx-sy, 1))
+    );
+  filter: blur(var(--fx-blur, 0px));
 }
 
-.post-ws__sticker.is-out {
-  /* Прозорість веде число з кадру, а не миттєвий клас: інакше предмет
-     блимав би на середині власного виходу. */
-  opacity: calc(1 - var(--out, 0));
+/* Прозорість виходу рахується інлайново, у PostWorkspace: правило звідси
+   ніколи не діяло — інлайновий стиль сильніший за таблицю, і предмет
+   зникав стрибком замість того, щоб згаснути. Клас лишається як ознака
+   стану для решти правил. */
+
+/* Спокійний предмет: без дрейфу і дихання. Клас навішувався для
+   screen-стікерів давно, але правила під нього НЕ БУЛО — він не робив
+   нічого. Тепер діє, і його ж бере sticker.still: коли рух кадру несе
+   орнамент (смайли по орбіті), предмет мусить стояти мертво. */
+.post-ws__sticker.is-still .post-ws__sticker-in,
+.post-ws__sticker.is-still .post-ws__sticker-breathe {
+  animation: none;
+}
+
+/* Шар бейджів картки колекційного. Лежить ПЕРЕД карткою в дереві, тож
+   опиняється під нею — плашка виходить з-за верхнього краю й туди ж
+   ховається. Перехід вимкнено: місце — чиста функція часу, і перехід
+   не згладив би його, а запізнив. */
+.post-ws__nft-badges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.post-ws__nft-badges .post-ws__badge {
+  transition: opacity 0.15s ease-out;
+}
+
+/* Предмет у слоті картки колекційного: коробка рахується щокадру з
+   масштабу самої картки, тож перехід тут не згладжує, а ЗАПІЗНЮЄ —
+   картка вже приїхала, а подарунок ще доїжджає своїм часом. Пара має
+   бути однією річчю, а одна річ не має двох годинників. */
+.post-ws__sticker.is-slot {
+  transition: opacity 0.15s ease-in;
+}
+
+/* Орнамент навколо предмета: обгортка ширша за коробку, бо стрілки й
+   сателіти живуть ПОРУЧ із картинкою, а не на ній. Під картинкою
+   (z-index нижчий за -in): край стрілки, що заходить на предмет,
+   ховається за ним — як домальоване позаду. */
+.post-ws__ornament {
+  position: absolute;
+  left: -40%;
+  top: -40%;
+  width: 180%;
+  height: 180%;
+  pointer-events: none;
+  z-index: 1;
+  overflow: visible;
+}
+
+.post-ws__ornament-ink {
+  fill: none;
+  stroke: #1c1c1e;
+  stroke-width: 4.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Шар зв'язок — на всю зону стікерів, під самими стікерами. */
+.post-ws__links {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  pointer-events: none;
+  z-index: 0;
+  overflow: visible;
+}
+
+.post-ws__links-arc {
+  fill: none;
+  stroke: #7c5cff;
+  stroke-width: 9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.post-ws__links-spark {
+  fill: none;
+  stroke: #ff3b30;
+  stroke-width: 7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .post-ws__sticker-in {
@@ -537,6 +1497,22 @@ html.post-shot .post-ws__frame {
   height: 100%;
   object-fit: contain;
   display: block;
+}
+
+/* Спрайт-аркуш: кадр вирізається позицією фону, розмір — сіткою.
+   Клітинка — квадрат по висоті боксу (кадри спрайта квадратні),
+   обгортка центрує: інакше фон тягнувся на весь бокс і плющив. */
+.post-ws__sticker-sprite {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.post-ws__sticker-sprite-cell {
+  height: 100%;
+  aspect-ratio: 1 / 1;
+  background-repeat: no-repeat;
 }
 
 /* Червона пігулка таврує предмет замість того, щоб присвоювати його.
@@ -784,21 +1760,85 @@ html.post-shot .post-ws__frame {
 
 /* Множник поруч із часом: інакше «0:25» без пояснення виглядає як
    помилка — доріжка ж на 0:51. */
+/* Множник біля плеєра — він же вхід до прискорення. */
 .post-ws__rate {
-  padding: 0 5px;
+  padding: 1px 6px;
+  border: 1px solid transparent;
   border-radius: 999px;
   background: var(--bg-fill-secondary);
-  color: var(--text-strong);
+  color: var(--text-soft);
   font-size: 10px;
+  cursor: pointer;
+}
+
+.post-ws__rate:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text-strong);
+}
+
+.post-ws__rate:disabled { opacity: 0.45; cursor: default; }
+
+/* Пришвидшення ввімкнене — множник помітний, бо це вже не типовий стан. */
+.post-ws__rate.is-on {
+  background: var(--bg-elevated);
+  border-color: var(--border-strong);
+  color: var(--text-strong);
+  font-weight: 600;
 }
 
 /* --- блоки --- */
 
+/*
+ * Ручні правки — панель поверх усього, а не колонка збоку.
+ *
+ * Доти десять кроків стояли поруч із кадром постійно. На екрані вони
+ * коштували половину ширини, а потрібні бувають раз на ролик — і то
+ * один-два з десяти. Тепер вони приходять на весь екран, коли по них
+ * прийшли, і йдуть, коли робота зроблена.
+ */
 .post-ws__blocks {
-  display: flex;
+  display: none;
   flex-direction: column;
   gap: 10px;
   min-width: 0;
+}
+
+/* Шторка знизу, а не весь екран: кадр лишається видимим над нею, і
+   правку одразу видно — інакше після кожної зміни доводилось закривати
+   панель, дивитись і відкривати знову. */
+.post-ws__blocks.is-open {
+  display: flex;
+  position: absolute;
+  inset: auto 0 0 0;
+  /* Нижче за модалки (4000+): діалог підтвердження має накривати і цю
+     панель. Вище за все інше — повертає назад кнопка «Закрити», а не
+     сусідні елементи під нею. */
+  z-index: 1600;
+  max-height: 82vh;
+  padding: 14px 16px 20px;
+  overflow-y: auto;
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
+  background: var(--bg-app, #fff);
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.18);
+}
+
+.post-ws__blocks-bar {
+  display: none;
+}
+
+.post-ws__blocks.is-open .post-ws__blocks-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 4px;
+}
+
+.post-ws__blocks-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-strong);
 }
 
 .post-block {
@@ -1215,17 +2255,45 @@ html.post-shot .post-ws__frame {
 
 /* Стрічка транскрипції під плеєром. Обмежена по висоті: на довгому
    ролику вона інакше витісняє все інше з екрана. */
+/* Згорнута — один рядок, розгорнута — увесь текст. Стрічка на сотню
+   слів розганяла скрол колонки настільки, що кнопки під нею їхали за
+   екран; цілком вона потрібна лише коли ставиш стікери на слова. */
 .post-ws__words {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 3px;
   max-width: 460px;
-  max-height: 132px;
-  overflow-y: auto;
+  max-height: 34px;
+  overflow: hidden;
   margin-top: 10px;
   padding: 8px;
   border-radius: 8px;
   background: var(--bg-subtle);
+}
+
+.post-ws__words.is-open {
+  max-height: 132px;
+  overflow-y: auto;
+}
+
+/* Перемикач стоїть ПЕРШИМ у стрічці й не переноситься: у згорнутому
+   стані видно саме його, а не випадкові перші слова. */
+.post-ws__words-toggle {
+  flex: 0 0 auto;
+  order: -1;
+  padding: 2px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--text-soft);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.post-ws__words-toggle:hover {
+  border-color: var(--border-strong);
+  color: var(--text-strong);
 }
 
 .post-ws__word {
@@ -1534,4 +2602,102 @@ html.post-shot .post-ws__host {
  */
 html.post-shot * {
   transition: none !important;
+}
+
+/* Результат рендера: файл + «Відкрити» / «У папці». Рядок живе у двох
+   місцях — низ центральної колонки і блок 9, — тому клас власний, від
+   конкретного блока не залежить. У центрі колонка розставляє дітей
+   через order, тож без явного order рядок стрибнув би НАД смугу
+   етапів. */
+.post-render-row {
+  order: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.post-render-row__file {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Посилання «Відкрити» вдягнене в post-block__pick — прибираємо
+   підкреслення, щоб воно читалось кнопкою, як сусід. */
+a.post-block__pick {
+  text-decoration: none;
+  display: inline-block;
+}
+
+.post-render-row.is-error { color: #c0563a; }
+
+/* Шторка «Сценарій» на головному екрані: біти зі script.md і кнопка
+   «Скопіювати для озвучки». Мета — один клік до тексту для ElevenLabs. */
+.post-script {
+  padding: 8px 12px 12px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.post-script__bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.post-script__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.post-script__row {
+  display: grid;
+  grid-template-columns: 26px 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 6px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.post-script__row:nth-child(odd) { background: rgba(0, 0, 0, 0.025); }
+
+.post-script__n {
+  color: var(--text-soft);
+  font-size: 11px;
+  text-align: right;
+}
+
+.post-script__text { color: var(--text-strong); }
+
+.post-script__meta {
+  color: var(--text-soft);
+  font-size: 10px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.post-script__plain {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.025);
+  font: 13px/1.5 inherit;
+  white-space: pre-wrap;
+  max-height: 46vh;
+  overflow-y: auto;
 }

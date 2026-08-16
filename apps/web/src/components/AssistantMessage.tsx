@@ -747,7 +747,10 @@ function AssistantMessageImpl({
       isBrandBrowserAssistMessage
     );
   const canFork = !streaming && !!onForkFromMessage;
-  const copyMarkdown = message.content.trim().length > 0 ? message.content : undefined;
+  // Форк: кнопку «скопіювати» під відповідями прибрано — власник нею не
+  // користується, а в коротких тернах вона висіла біля порожнього
+  // рядка. undefined вимикає і кнопку, і її внесок у completion-row.
+  const copyMarkdown = undefined;
   const showFeedback =
     !!onFeedback &&
     isFeedbackEligible({
@@ -810,13 +813,6 @@ function AssistantMessageImpl({
         (!nextUserContent || !parseSubmittedAnswers(seg.form, nextUserContent)),
     );
   }, [message.content, nextUserContent, suppressDirectionForms]);
-  // "Next step" is a delivery affordance, not a generic terminal-state card.
-  // Keep it out of pure Q&A, failures/cancellations and incomplete Todo turns;
-  // only a successful turn that actually produced something may surface it.
-  const hasTurnDeliverable =
-    turnArtifactOps.length > 0 ||
-    displayedProduced.length > 0 ||
-    pluginActionFolders.length > 0;
   // Incomplete brand extraction is an explicit recovery workflow, not a
   // generic failed turn: its Continue action is the only way to resume the
   // saved extraction state, even when no artifact was produced yet.
@@ -825,12 +821,16 @@ function AssistantMessageImpl({
     (effectiveNextStepVariant === 'brand-extraction-incomplete' ||
       effectiveNextStepVariant === 'brand-programmatic-incomplete' ||
       effectiveNextStepVariant === 'brand-ai-incomplete');
+  // Форк: картку-підказку «Підібрати наступний крок / Доопрацювання
+  // дизайну» після успішних тернів прибрано — у Post Studio вона
+  // з'являлась під КОЖНОЮ відповіддю агента і була шумом. Лишаються
+  // тільки функціональні кейси: відновлення brand-extraction (кнопка
+  // «Продовжити» — єдиний шлях підняти збережений стан) і submission.
   const showNextStepActions =
     !streaming &&
     unfinishedTodos.length === 0 &&
     !hasPendingQuestionForm &&
-    ((!!isLast && hasNextStepPrimary &&
-      ((runSucceeded && hasTurnDeliverable) || isBrandExtractionRecovery)) ||
+    ((!!isLast && hasNextStepPrimary && isBrandExtractionRecovery) ||
       showOpenDesignSubmission);
   // Pre-output vs working: before any real content (text / thinking / tools /
   // files) the footer shimmers "Preparing…"; the moment content lands it
@@ -982,17 +982,23 @@ function AssistantMessageImpl({
             ].join(":")}
           />
         ) : null}
-        {turnArtifactOps.length > 0 ? (
+        {/*
+          Форк: картки файлів («Файли з цієї черги» / зведення операцій)
+          у чаті приховано — власник дивиться результат у студії, а не
+          списком файлів під кожною відповіддю. Компоненти лишаються в
+          коді: їх використовує інший режим і легко повернути.
+        */}
+        {false && turnArtifactOps.length > 0 ? (
           <FileOpsSummary
             entries={turnArtifactOps}
             projectFileNames={projectFileNames}
             onRequestOpenFile={onRequestOpenFile}
           />
         ) : null}
-        {!streaming && turnArtifactOps.length === 0 && displayedProduced.length > 0 && projectId ? (
+        {false && !streaming && turnArtifactOps.length === 0 && displayedProduced.length > 0 && projectId ? (
           <ProducedFiles
             files={displayedProduced}
-            projectId={projectId}
+            projectId={projectId ?? ''}
             onRequestOpenFile={onRequestOpenFile}
           />
         ) : null}

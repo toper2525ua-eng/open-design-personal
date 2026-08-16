@@ -8,6 +8,10 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
+import {
+  isOpenDesignHostAvailable,
+  openHostProjectPath,
+} from '@open-design/host';
 
 import { uploadProjectFiles } from '../providers/registry';
 import { LottieSticker } from './LottieSticker';
@@ -25,7 +29,12 @@ import {
   labelPop,
   liveBadges,
   badgePop,
+  badgePopSlide,
   badgeRankFade,
+  BADGE_H_PX,
+  BADGE_ROOM,
+  BADGE_HALF,
+  BADGE_EDGE,
   postStage,
   sceneSpan,
   sceneText,
@@ -36,12 +45,38 @@ import {
   STICKER_RE,
   stickerDrift,
   stickerEnter,
+  stickerExit,
   stickerLayout,
   stickerSpans,
   wordGlow,
+  demoPost,
+  MOTION_GROUPS,
+  ARROW_SLOTS,
+  isNftCard,
+  NFT_CARD_SLOT,
+  ornamentPop,
+  ORNAMENT_TONE_COLOR,
+  TG_PATTERN_GIFT,
+  TG_CARD_RADIUS_DP,
+  TG_RIBBON_SIZE_DP,
+  TG_RIBBON_PATH_D,
+  TG_RIBBON_TEXT_DP,
+  TG_RIBBON_TEXT_MAX_W_DP,
+  TG_RIBBON_HSV_SAT,
+  TG_RIBBON_HSV_VAL,
+  TG_ICON_STAR_D,
+  tgAdaptHsv,
+  prand,
+  cardStickerFly,
   type Beat,
+  type CardSticker,
   type CardStep,
+  type MotionEntry,
+  type MotionGroup,
   type PostSpec,
+  type Sticker,
+  type StickerOrnament,
+  type StickerSprite,
   type WordTiming,
 } from './post-spec';
 
@@ -88,6 +123,31 @@ const POSE_RE = /(^|[\\/])(assets[\\/])?character[\\/].*\.(png|webp)$/i;
 // `od library import --tag` не накопичується, другий затирає перший.
 const LIBRARY_HOST_TAG = 'reels-host';
 
+// Те саме для НАБОРУ СТІКЕРІВ. Раніше набір жив тільки у теці свого
+// проєкту, тож другий ролик відкривався з порожньою бібліотекою
+// («Реєстр не знайдено»), і агент малював усе заново — щоразу в новій
+// манері. Один стікер, вдаліший сам по собі, але іншого набору, псує
+// кадр сильніше за посередній свій, тому набір має бути наскрізним.
+const LIBRARY_STICKER_TAG = 'reels-sticker';
+
+/**
+ * Запис каталогу подарунків Telegram (`<data>/gifts/gifts.json`).
+ *
+ * `kind` — два види, які глядач плутає, а ролик мусить розрізняти:
+ * `star` — подарунок за зірки з магазину (конвертується назад у зірки),
+ * `nft` — колекційний після апгрейду (унікальний, живе на TON).
+ * Довідник для сценаріїв — `references/gifts-nft.md` у плагіні.
+ */
+interface GiftItem {
+  slug: string;
+  emoji?: string;
+  title?: string;
+  /** Для чого брати в ролик — те саме поле, що в реєстрі стікерів. */
+  use?: string;
+  kind: 'star' | 'nft';
+  customEmojiId?: string;
+}
+
 /** Запис із poses.json — реєстр ведучого, який росте між роликами. */
 interface PoseEntry {
   id: string;
@@ -129,6 +189,15 @@ interface RegistryEntry {
   status?: 'needed';
   brief?: string;
   folder?: string;
+  /** Спрайт-аркуш (подарунки Telegram) — розкладка кадрів у PNG. */
+  sprite?: StickerSprite;
+  /**
+   * Ассет у спільній бібліотеці. Рівно те саме поле й та сама роль, що в
+   * реєстрі поз: без нього набір лишається всередині одного проєкту, і
+   * НАСТУПНИЙ ролик починає з порожнього місця — а це означає нові стікери
+   * в новій манері замість одного набору.
+   */
+  libraryId?: string;
 }
 
 /**
@@ -158,8 +227,322 @@ function rawUrl(projectId: string, filePath: string): string {
   return `/api/projects/${projectId}/raw/${filePath.split('/').map(encodeURIComponent).join('/')}`;
 }
 
+/*
+ * Стан рендера з демона. Студія сама запускає рендер і сама показує
+ * готовий файл — без повідомлень агенту і без «дай посилання, де файл».
+ */
+interface RenderStatus {
+  state: 'idle' | 'running' | 'done' | 'error';
+  startedAt: number | null;
+  finishedAt: number | null;
+  exitCode: number | null;
+  error: string | null;
+  tail: string;
+  out: { name: string; size: number; mtimeMs: number } | null;
+  dir: string | null;
+}
+
+/*
+ * Стан таймкодів з демона. Заливка mp3 сама запускає forced alignment —
+ * обов'язковий чат-крок кожного ролика («залив mp3, зроби таймкоди»)
+ * зник: рішень у ньому не було. Слова в post.json переносить демон,
+ * студія підхоплює їх звичайним поллером post.json.
+ */
+interface AlignStatus {
+  state: 'idle' | 'running' | 'done' | 'error';
+  startedAt: number | null;
+  error: string | null;
+  report: { words?: number; worst_loss?: number; warning?: string } | null;
+}
+
+/*
+ * Прогрес — із хвоста лога: render.py пише «  12.0 с / 31.0» кожні
+ * 5 с відео і «ffmpeg…» перед склейкою. Парсимо текст, а не заводимо
+ * окремий протокол: лог і так пишеться, а формат рядків — наш власний.
+ */
+function renderProgress(tail: string): string {
+  // «frame=» — прогрес самого ffmpeg: на довгій склейці рядок «ffmpeg…»
+  // від render.py випадає з 4-кілобайтного хвоста, і без цієї ознаки
+  // напис відкочувався б на «знімаємо кадри…».
+  if (tail.includes('ffmpeg') || tail.includes('frame=')) return 'склейка mp4…';
+  const marks = [...tail.matchAll(/^\s*([\d.]+) с \/ ([\d.]+)/gm)];
+  const last = marks[marks.length - 1];
+  if (last) {
+    const num = Number(last[1]);
+    const den = Number(last[2]);
+    if (den > 0) return `${Math.min(99, Math.round((num / den) * 100))}%`;
+  }
+  return 'знімаємо кадри…';
+}
+
+// «щойно» чесніше за «0 хв тому», а після години точний час корисніший
+// за «73 хв»: рендерів на день кілька, і питання завжди «це той файл?»
+function fileAge(mtimeMs: number): string {
+  const d = Date.now() - mtimeMs;
+  if (d < 90_000) return 'щойно';
+  if (d < 3_600_000) return `${Math.round(d / 60_000)} хв тому`;
+  return new Date(mtimeMs).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+}
+
 function libraryRawUrl(assetId: string): string {
   return `/api/library/assets/${encodeURIComponent(assetId)}/raw`;
+}
+
+/*
+ * Спрайт-стікер: сітка кадрів у одному PNG, кадр — чиста функція віку
+ * (той самий контракт, що LottieSticker: плеєр лише перемотують).
+ * Народився з Telegram-емодзі: їхні TGS lottie-web будує, але мовчки
+ * малює нуль шейпів — тож кадри рендерить rlottie заздалегідь.
+ */
+function SpriteSticker({ src, sprite, age }: {
+  src: string;
+  sprite: StickerSprite;
+  age: number;
+}) {
+  const frame = Math.floor(Math.max(age, 0) * sprite.fps) % Math.max(sprite.frames, 1);
+  const col = frame % sprite.cols;
+  const row = Math.floor(frame / sprite.cols);
+  // Відсоткова позиція: p% зображення суміщається з p% контейнера,
+  // тож col/(cols-1) дає рівно клітинку сітки при size cols*100%.
+  const px = sprite.cols > 1 ? (col / (sprite.cols - 1)) * 100 : 0;
+  const py = sprite.rows > 1 ? (row / (sprite.rows - 1)) * 100 : 0;
+  // Кадри спрайта квадратні, а коробка предмета — не завжди: зона
+  // стікерів ріже квадрат по висоті, і фон, розтягнутий на бокс,
+  // плющив картинку. Клітинка тримає власний аспект (аналог
+  // object-fit: contain у <img>-гілки), обгортка лише центрує.
+  return (
+    <div className="post-ws__sticker-sprite" aria-hidden>
+      <div
+        className="post-ws__sticker-sprite-cell"
+        style={{
+          backgroundImage: `url("${src}")`,
+          backgroundSize: `${sprite.cols * 100}% ${sprite.rows * 100}%`,
+          backgroundPosition: `${px}% ${py}%`,
+        }}
+      />
+    </div>
+  );
+}
+
+/*
+ * Орнаменти навколо предмета — стрілки «дивись сюди» і кружечки-
+ * сателіти (підглянуто в референсів). Живуть УСЕРЕДИНІ дива стікера,
+ * тож вхід, вихід і прозорість предмета застосовуються до них
+ * безкоштовно. Уся геометрія — чиста функція часу: перемотка в будь-
+ * який бік малює той самий кадр, Math.random тут заборонений.
+ */
+function StickerOrnamentLayer({ ornament, age, time, seed }: {
+  ornament: StickerOrnament;
+  age: number;
+  time: number;
+  seed: number;
+}) {
+  const C = 90;
+  if (ornament.kind === 'arrows') {
+    const count = Math.min(Math.max(ornament.count ?? 4, 1), ARROW_SLOTS.length);
+    return (
+      <svg className="post-ws__ornament" viewBox="0 0 180 180" aria-hidden>
+        {ARROW_SLOTS.slice(0, count).map((slot, i) => {
+          const p = ornamentPop(age, i);
+          if (p <= 0) return null;
+          const aim = (Math.atan2(C - slot.y, C - slot.x) * 180) / Math.PI;
+          // Легке «дихання» кута: стрілки мальовані рукою, а не
+          // проштамповані — кожна гойдається у своїй фазі.
+          const wob = 2.5 * Math.sin((time / 1.3) * Math.PI * 2 + i * 2.1);
+          // Вигин — «назовні» від вертикалі предмета: лівим слотам дуга
+          // гнеться в один бік, правим — у протилежний. Спільний напрям
+          // вигину після повороту робив частину стрілок «повислими»:
+          // дуга йшла проти руки, наче її малювали навиворіт.
+          const bend = slot.x <= C ? 1 : -1;
+          const tipAng = (Math.atan2(8 * bend, 14) * 180) / Math.PI;
+          return (
+            <g key={i} transform={`translate(${slot.x} ${slot.y}) rotate(${aim + wob})`}>
+              {/* Проростання від хвоста до вістря — стрілку домальовують,
+                  а не вмикають. pathLength нормалізує довжину, тож
+                  крива може мінятись без переобчислення дашів. */}
+              <path
+                d={`M0 0 Q 14 ${-8 * bend}, 28 0`}
+                pathLength={30}
+                strokeDasharray={30}
+                strokeDashoffset={30 * (1 - p)}
+                className="post-ws__ornament-ink"
+              />
+              {/* Вістря — симетричний шеврон по дотичній кінця дуги:
+                  асиметричне після повороту виглядало зламаним. */}
+              <path
+                d="M-8 -6 L0 0 L-8 6"
+                transform={`translate(28 0) rotate(${tipAng})`}
+                className="post-ws__ornament-ink"
+                style={{ opacity: p > 0.7 ? (p - 0.7) / 0.3 : 0 }}
+              />
+            </g>
+          );
+        })}
+      </svg>
+    );
+  }
+  const count = Math.min(Math.max(ornament.count ?? 6, 1), 8);
+  const color = ORNAMENT_TONE_COLOR[ornament.tone ?? 'info'];
+  return (
+    <svg className="post-ws__ornament" viewBox="0 0 180 180" aria-hidden>
+      {Array.from({ length: count }, (_, i) => {
+        const p = ornamentPop(age, i);
+        if (p <= 0) return null;
+        const jitter = prand(seed * 13.7 + i) * 24 - 12;
+        const base = (360 / count) * i - 90 + jitter;
+        // Повільна орбіта після розльоту: кружечки висять і живуть,
+        // а не застигають рамкою навколо предмета.
+        const ang = ((base + 6 * Math.sin((time / 2.6) * Math.PI * 2 + i * 1.7)) * Math.PI) / 180;
+        const R = (52 + prand(seed * 7.3 + i) * 18) * p;
+        return (
+          <circle
+            key={i}
+            cx={C + Math.cos(ang) * R}
+            cy={C + Math.sin(ang) * R}
+            r={6.5}
+            fill={color}
+            stroke="#fff"
+            strokeWidth={2}
+            style={{ opacity: p }}
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
+interface LinkSpan {
+  sticker: Sticker;
+  start: number;
+  end: number;
+  left: number;
+  width: number;
+}
+
+/*
+ * Зв'язки МІЖ предметами: дуга «A веде до B» та іскри конфлікту.
+ * Окремий шар ПІД стікерами, прив'язаний до статичних коробок
+ * розкладки: дрейф предметів дугу не смикає — так і в референсі.
+ * Зв'язка живе, лише поки живі ОБИДВА кінці.
+ */
+function StickerLinksLayer({ spans, time, zoneTop, zoneBottom }: {
+  spans: readonly LinkSpan[];
+  time: number;
+  zoneTop: number;
+  zoneBottom: number;
+}) {
+  const zoneH = Math.max((zoneBottom - zoneTop) * CANVAS.h, 1);
+  const links = spans.flatMap((dst) => {
+    const link = dst.sticker.link;
+    if (!link) return [];
+    const src = spans.find((o) => o.sticker.id === link.from);
+    if (!src || src === dst) return [];
+    const born = Math.max(src.start, dst.start);
+    const gone = Math.min(src.end, dst.end);
+    const grow = Math.min(Math.max((time - born - 0.3) / 0.45, 0), 1);
+    const fade = 1 - Math.min(Math.max((time - (gone - 0.3)) / 0.3, 0), 1);
+    if (grow <= 0 || fade <= 0) return [];
+    return [{ src, dst, kind: link.kind, grow, fade }];
+  });
+  if (links.length === 0) return null;
+  return (
+    <svg
+      className="post-ws__links"
+      viewBox={`0 0 ${CANVAS.w} ${zoneH}`}
+      style={{ top: `${zoneTop * 100}%`, height: `${(zoneBottom - zoneTop) * 100}%` }}
+      aria-hidden
+    >
+      {links.map(({ src, dst, kind, grow, fade }, li) => {
+        const leftFirst = src.left + src.width / 2 <= dst.left + dst.width / 2;
+        const a = leftFirst ? src : dst;
+        const b = leftFirst ? dst : src;
+        const xa = (a.left + a.width * 0.86) * CANVAS.w;
+        const xb = (b.left + b.width * 0.14) * CANVAS.w;
+        const y = zoneH * 0.42;
+        if (kind === 'sparks') {
+          // Іскри посередині: три зигзаги, що спалахують по черзі.
+          // Фази зсунуті простими числами — цикл не збігається сам із
+          // собою і не читається як метроном.
+          const xm = (xa + xb) / 2;
+          return (
+            <g key={li} transform={`translate(${xm} ${y})`} style={{ opacity: fade }}>
+              {[0, 1, 2].map((i) => {
+                const f = ((time * 2.4) + i * 0.37) % 1;
+                const flash = f < 0.5 ? Math.sin((Math.PI * f) / 0.5) : 0;
+                const rot = prand(i * 5.1 + 2) * 44 - 22;
+                const dx = prand(i * 3.7 + 1) * 70 - 35;
+                const dy = prand(i * 9.2 + 4) * 50 - 25;
+                return (
+                  <path
+                    key={i}
+                    transform={`translate(${dx} ${dy}) rotate(${rot})`}
+                    d="M-30 8 L-10 -10 L4 4 L26 -12"
+                    className="post-ws__links-spark"
+                    style={{ opacity: flash * grow }}
+                  />
+                );
+              })}
+            </g>
+          );
+        }
+        // Дуга летить НАД проміжком між предметами, а не крізь них:
+        // хвіст — від верхнього внутрішнього кута A, вістря спиняється
+        // ПЕРЕД B із зазором і дивиться вниз-у предмет по дотичній.
+        // Раніше кінці стояли на середині висоти коробок — хвіст лежав
+        // на самому предметі, а вістря втикалось у наліпку B.
+        const axArc = (a.left + a.width * 0.9) * CANVAS.w;
+        const bxArc = (b.left + b.width * 0.04) * CANVAS.w;
+        const ayArc = zoneH * 0.34;
+        const byArc = zoneH * 0.28;
+        const cx = (axArc + bxArc) / 2;
+        const cy = zoneH * 0.02;
+        const head = (Math.atan2(byArc - cy, bxArc - cx) * 180) / Math.PI;
+        return (
+          <g key={li} style={{ opacity: fade }}>
+            <path
+              d={`M ${axArc} ${ayArc} Q ${cx} ${cy} ${bxArc} ${byArc}`}
+              pathLength={100}
+              strokeDasharray={100}
+              strokeDashoffset={100 * (1 - grow)}
+              className="post-ws__links-arc"
+            />
+            {/* Вістря — симетричний шеврон по дотичній кінця дуги;
+                проявляється, коли дуга доросла до кінця. */}
+            <path
+              d="M-20 -12 L0 0 L-20 12"
+              transform={`translate(${bxArc} ${byArc}) rotate(${head})`}
+              className="post-ws__links-arc"
+              style={{ opacity: grow > 0.8 ? (grow - 0.8) / 0.2 : 0 }}
+            />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/*
+ * Місце бейджа за ПЛАВНИМ рангом. Три позиції: 0 — над предметом,
+ * 1 — праворуч, 2 — ліворуч; між ними лінійна інтерполяція, тож поява
+ * нового бейджа перевозить старі, а не телепортує. Бічні сидять нижче
+ * (58 % проти 96 %): піднімеш їх до верхньої плашки — впруться в шапку
+ * Instagram. Координати рахуються в частках КАДРУ, інакше вузький
+ * предмет відкидав би плашку за край.
+ */
+function badgeSpot(rankSmooth: number, left: number, width: number): { centre: number; bottom: number } {
+  const mid = left + width / 2;
+  const right = Math.min(left + width + BADGE_HALF * 0.9, 1 - BADGE_EDGE);
+  const leftSide = Math.max(left - BADGE_HALF * 0.9, BADGE_EDGE);
+  const at = (i: number): { centre: number; bottom: number } => (
+    i <= 0 ? { centre: mid, bottom: 96 }
+      : i === 1 ? { centre: right, bottom: 58 }
+        : { centre: leftSide, bottom: 58 }
+  );
+  const lo = Math.floor(rankSmooth);
+  const k = rankSmooth - lo;
+  const a = at(lo);
+  const b = at(lo + 1);
+  return { centre: a.centre + (b.centre - a.centre) * k, bottom: a.bottom + (b.bottom - a.bottom) * k };
 }
 
 function measureAudio(url: string): Promise<number> {
@@ -459,6 +842,10 @@ function HostLayer({ src }: { src: string }) {
  */
 const useDomLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
+// Розмітка карток за src — переживає перемонтування CardLayer (деталі
+// в коментарі всередині компонента).
+const cardHtmlCache = new Map<string, string>();
+
 /**
  * Картка в кадрі. Розмітку пише АГЕНТ у `assets/blocks/<id>.html`,
  * студія її лише вставляє, масштабує під кадр і відкриває рядки під мову.
@@ -468,25 +855,44 @@ const useDomLayoutEffect = typeof window === 'undefined' ? useEffect : useLayout
  * рахуємо його з реальної ширини, бо поділити довжину на довжину в CSS
  * не можна, а гадати про розмір превʼю не варто — воно ще й гумове.
  */
-function CardLayer({ src, hold, start, time, top, words }: {
+function CardLayer({ src, hold, start, time, top, words, sticker, stickerUrl }: {
   src: string;
   hold: number;
   start: number;
   time: number;
   top: number;
   words: readonly WordTiming[];
+  sticker?: CardSticker | null;
+  stickerUrl?: string | null;
 }) {
-  const [html, setHtml] = useState<string | null>(null);
+  // Кеш розмітки живе поза компонентом: картка МОНТУЄТЬСЯ щоразу, коли
+  // її span стає живим (у лупі демо — щоколa), і без кешу кожна поява
+  // починалась із мережевого фетчу. Поки той летів, кадр стояв
+  // порожній, а час ішов — картка і наліпка вискакували вже ПОСЕРЕД
+  // своєї появи, телепортом. З кешем розмітка стає одразу, а свіжа
+  // версія доїжджає фоном — живі правки агента не губляться.
+  const [html, setHtml] = useState<string | null>(() => cardHtmlCache.get(src) ?? null);
   const [k, setK] = useState(1);
+  // Висота вмісту картки в її власних (1080-пікс) координатах — без неї
+  // не поставити стікер на нижній край: висоту диктує розмітка.
+  const [ch, setCh] = useState(0);
   const wrap = useRef<HTMLDivElement | null>(null);
   const box = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setHtml(cardHtmlCache.get(src) ?? null);
     void (async () => {
       try {
         const r = await fetch(src, { cache: 'no-store' });
-        if (r.ok && !cancelled) setHtml(await r.text());
+        if (!r.ok) return;
+        const text = await r.text();
+        cardHtmlCache.set(src, text);
+        if (!cancelled) {
+          // Не смикати стан тим самим рядком: перезапис innerHTML скидає
+          // CSS-анімації всередині картки на початок.
+          setHtml((prev) => (prev === text ? prev : text));
+        }
       } catch {
         // файлу немає — кадр просто лишиться без картки
       }
@@ -496,10 +902,28 @@ function CardLayer({ src, hold, start, time, top, words }: {
     };
   }, [src]);
 
-  useEffect(() => {
+  // Замір — ДО малювання (layout-ефект): звичайний ефект виконується
+  // після, і перший кадр картки встигав показатись НЕмасштабованим —
+  // розмітка 1080 px на мить вставала «текстом на весь екран». Поки
+  // розмітку тягнув фетч, зблиск ховався за мережевою паузою; з кешем
+  // картка стає одразу — і він вилазив на кожному перемиканні демо.
+  useDomLayoutEffect(() => {
     const el = wrap.current;
     if (!el) return undefined;
     const measure = (): void => setK(el.clientWidth / CANVAS.w);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [html]);
+
+  // offsetHeight — розмір ДО transform-масштабу, тобто рівно в тих
+  // координатах, у яких агент малює розмітку. Теж layout-ефект: інакше
+  // наліпка перший кадр стояла б без місця (ch=0).
+  useDomLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return undefined;
+    const measure = (): void => setCh(el.offsetHeight);
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -543,11 +967,71 @@ function CardLayer({ src, hold, start, time, top, words }: {
 
   if (!html) return null;
   const motion = cardMotion(time - start, hold);
+  const stWord = sticker ? words[sticker.word] : undefined;
+  const stickerOn = sticker && stickerUrl && ch > 0 && stWord && time >= stWord.start;
+  let stickerNode: JSX.Element | null = null;
+  if (stickerOn && sticker && stWord) {
+    const sz = CANVAS.w * (sticker.size ?? 0.16);
+    const spot = sticker.spot ?? 'br';
+    // Центр — на краю/куті картки: половина наліпки навмисно виступає
+    // за неї, як у референса. Кути трохи всунуті, щоб не зрізати
+    // заокруглення розмітки.
+    const cx = spot === 'l' ? 0
+      : spot === 'r' ? CANVAS.w
+        : spot === 'tl' || spot === 'bl' ? CANVAS.w * 0.09 : CANVAS.w * 0.91;
+    const cy = spot === 'l' || spot === 'r' ? ch * 0.55
+      : spot === 'tl' || spot === 'tr' ? 0 : ch;
+    // Вліт з-за краю ЕКРАНА до місця. Дистанція — до повного зникнення
+    // за кадром, тож перший кадр наліпки за екраном. Напрям — із поля
+    // або за місцем: лівим spot'ам зліва, правим справа.
+    const from = sticker.from
+      ?? (spot === 'l' || spot === 'tl' || spot === 'bl' ? 'left' : 'right');
+    const flight = cardStickerFly(time - stWord.start);
+    // Для «згори» відстань рахуємо від верху КАДРУ, не картки: картка
+    // стоїть нижче за topFrac, і наліпка мусить стартувати за екраном.
+    const off = from === 'right'
+      ? CANVAS.w + sz * 0.6 + 60 - cx
+      : from === 'left'
+        ? -(cx + sz * 0.6 + 60)
+        : -(top * CANVAS.h + cy + sz * 0.6 + 60);
+    const dx = from === 'top' ? 0 : flight * off;
+    const dy = from === 'top' ? flight * off : 0;
+    // Сталий нахил від слова + нахил у польоті (відкидається назад від
+    // руху; згори — легке довертання) + повільне дихання. Все
+    // детерміноване — перемотка малює той самий кадр.
+    const lean = from === 'right' ? 14 : from === 'left' ? -14 : 10;
+    const rot = (prand(sticker.word * 3.3 + 1) * 12 - 6)
+      + flight * lean
+      + 2 * Math.sin((time / 2.4) * Math.PI * 2);
+    stickerNode = (
+      <div
+        className="post-ws__card-fx"
+        style={{ transform: `translateX(-50%) scale(${k * motion.scale})` }}
+      >
+        <img
+          src={stickerUrl}
+          alt=""
+          style={{
+            left: cx - sz / 2 + dx,
+            top: cy - sz / 2 + dy,
+            width: sz,
+            transform: `rotate(${rot}deg)`,
+          }}
+        />
+      </div>
+    );
+  }
   return (
     <div
       className="post-ws__card"
       ref={wrap}
-      style={{ top: `${(top + motion.y / 100) * 100}%`, opacity: motion.opacity }}
+      style={{
+        top: `${(top + motion.y / 100) * 100}%`,
+        // Приїзд справа — зсув у відсотках ШИРИНИ кадру (motion.x),
+        // тобто чиста функція часу: перемотка і рендер дають те саме.
+        transform: `translateX(${motion.x}%)`,
+        opacity: motion.opacity,
+      }}
     >
       <div
         className="post-ws__card-in"
@@ -558,6 +1042,7 @@ function CardLayer({ src, hold, start, time, top, words }: {
         // виконуються, тож картка лишається саме розміткою.
         dangerouslySetInnerHTML={{ __html: html }}
       />
+      {stickerNode}
     </div>
   );
 }
@@ -638,6 +1123,7 @@ function applyCardState(
 function BlockShell({
   num,
   title,
+  blockId,
   stateClass,
   open,
   pinned,
@@ -650,6 +1136,7 @@ function BlockShell({
 }: {
   num: number;
   title: string;
+  blockId: string;
   stateClass: string;
   open: boolean;
   pinned: boolean;
@@ -662,6 +1149,10 @@ function BlockShell({
 }) {
   return (
     <section
+      // Ім'я кроку в розмітці: чернетка ховає все, крім звуку й сценарію,
+      // і робить це за іменем, а не за порядковим номером — інакше будь-яка
+      // вставка блоку тихо змінила б, що саме видно.
+      data-block={blockId}
       className={`post-block${stateClass}${open ? ' is-open' : ''}${pinned ? ' is-pinned' : ''}`}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
@@ -730,6 +1221,291 @@ export function PostWorkspace({
    * і губить query, тож ?shot=1 доживав рівно до першого переходу.
    */
   const [shotMode, setShotMode] = useState(false);
+  // Десять кроків із ручними правками поїхали з екрана в панель за
+  // кнопкою: щодня потрібен один-два, а решта вісім забирали половину
+  // ширини й ховали те, заради чого сюди заходять, — сам кадр.
+  const [manualOpen, setManualOpen] = useState(false);
+  const [speedOpen, setSpeedOpen] = useState(false);
+  const [wordsOpen, setWordsOpen] = useState(false);
+
+  /*
+   * Конструктор анімацій.
+   *
+   * Словник рухів лежить у проєкті даними — assets/motions.json. Панель
+   * показує записи, а клік по запису програє його demo прямо в кадрі:
+   * кадр тимчасово малює синтетичний мініролик замість post.json, тим
+   * самим кодом, що й справжній — тому прев'ю руху не «схоже» на те, що
+   * буде в ролику, а і є ним.
+   */
+  const [motionsOpen, setMotionsOpen] = useState(false);
+  /*
+   * Каталог подарунків Telegram: 165 анімованих емодзі, спільні на всі
+   * ролики (живуть у даних демона). Два види — за зірки і колекційні
+   * (NFT); клік «Взяти» кладе подарунок у набір проєкту спрайт-аркушем.
+   */
+  /*
+   * Сценарій для озвучки. Джерело — script.md (таблиця бітів із темпом,
+   * тоном і паузою, яку пише агент), запасне — post.json.script. Файл
+   * перечитується, поки шторка відкрита: агент дописує біти в чаті, і
+   * власник має бачити свіжу версію без перезапуску.
+   */
+  const [scriptOpen, setScriptOpen] = useState(false);
+  const [scriptMd, setScriptMd] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!scriptOpen) return undefined;
+    let stopped = false;
+    const pull = async (): Promise<void> => {
+      try {
+        const resp = await fetch(rawUrl(projectId, 'script.md'), { cache: 'no-store' });
+        if (stopped) return;
+        setScriptMd(resp.ok ? await resp.text() : null);
+      } catch {
+        if (!stopped) setScriptMd(null);
+      }
+    };
+    void pull();
+    const id = window.setInterval(() => void pull(), 3000);
+    return () => {
+      stopped = true;
+      window.clearInterval(id);
+    };
+  }, [scriptOpen, projectId]);
+
+  // Рядки таблиці бітів: | # | Фраза | Темп | Тон | Пауза |. Заголовок і
+  // роздільник пропускаємо; шапку YAML (hook:/frame:) читаємо окремо.
+  const scriptRows = useMemo(() => {
+    if (!scriptMd) return [] as Array<{ n: number; text: string; tempo: number | null; tone: number | null; pause: number | null }>;
+    const rows: Array<{ n: number; text: string; tempo: number | null; tone: number | null; pause: number | null }> = [];
+    for (const line of scriptMd.split(/\r?\n/)) {
+      const m = /^\|\s*(\d+)\s*\|\s*(.+?)\s*\|\s*(-?[\d.]+)?\s*\|\s*(-?[\d.]+)?\s*\|\s*(-?[\d.]+)?\s*\|/.exec(line);
+      if (!m) continue;
+      const num = (v: string | undefined): number | null => (v == null || v === '' ? null : Number(v));
+      rows.push({ n: Number(m[1]), text: m[2] ?? '', tempo: num(m[3]), tone: num(m[4]), pause: num(m[5]) });
+    }
+    return rows;
+  }, [scriptMd]);
+
+  const scriptMeta = useMemo(() => {
+    const hook = scriptMd ? /^hook:\s*(.+)$/m.exec(scriptMd)?.[1]?.trim() ?? '' : '';
+    const frame = scriptMd ? /^frame:\s*(.+)$/m.exec(scriptMd)?.[1]?.trim() ?? '' : '';
+    return { hook, frame };
+  }, [scriptMd]);
+
+  // Чистий текст для ElevenLabs: лише фрази, по одній на рядок.
+  const scriptPlain = useMemo(
+    () => (scriptRows.length ? scriptRows.map((r) => r.text).join('\n') : (post?.script ?? '')),
+    [scriptRows, post?.script],
+  );
+
+  const [giftsOpen, setGiftsOpen] = useState(false);
+  const [gifts, setGifts] = useState<GiftItem[] | null>(null);
+  const [giftTake, setGiftTake] = useState<{ slug: string; state: 'running' | 'done' | 'error'; error?: string } | null>(null);
+
+  useEffect(() => {
+    if (!giftsOpen || gifts != null) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const resp = await fetch('/api/gifts', { cache: 'no-store' });
+        if (!resp.ok) return;
+        const doc = await resp.json() as { items?: GiftItem[] };
+        if (!cancelled) setGifts(doc.items ?? []);
+      } catch {
+        // каталогу немає — галерея покаже порожньо
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [giftsOpen, gifts]);
+
+  const takeGift = useCallback(async (g: GiftItem, variant?: string): Promise<void> => {
+    const key = variant ? `${g.slug}:${variant}` : g.slug;
+    setGiftTake({ slug: key, state: 'running' });
+    try {
+      const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/gifts/take`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          slug: g.slug,
+          ...(variant ? { variant } : {}),
+          id: variant ? `${g.slug}-${variant}` : g.slug,
+        }),
+      });
+      const data = await resp.json().catch(() => null) as { error?: string } | null;
+      if (!resp.ok) throw new Error(data?.error ?? `HTTP ${resp.status}`);
+      // Рендер спрайта — секунди; поллер простий, бо дія разова.
+      for (let i = 0; i < 60; i += 1) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const st = await fetch(`/api/projects/${encodeURIComponent(projectId)}/gifts/take`, { cache: 'no-store' })
+          .then((r) => r.json() as Promise<{ state: string; error?: string }>)
+          .catch(() => null);
+        if (!st || st.state === 'running') continue;
+        if (st.state === 'error') throw new Error(st.error ?? 'скрипт впав');
+        break;
+      }
+      setGiftTake({ slug: key, state: 'done' });
+      setNote(`подарунок «${g.title || g.slug}${variant ? ` · модель ${variant}` : ''}» у наборі`);
+      await onRefreshFiles?.();
+    } catch (err) {
+      setGiftTake({ slug: key, state: 'error', error: err instanceof Error ? err.message : String(err) });
+    }
+  }, [projectId, onRefreshFiles]);
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [motions, setMotions] = useState<MotionEntry[] | null>(null);
+  const [motionPreview, setMotionPreview] = useState<MotionEntry | null>(null);
+  const [demoTime, setDemoTime] = useState(0);
+
+  /*
+   * Рендер. Кнопка б'є в демон (POST /render), демон запускає той самий
+   * render.py — агент у цьому шляху не бере участі. Поки йде — поллер
+   * читає стан і хвіст лога для відсотка; після — рядок із готовим
+   * файлом і діями «відкрити» / «у папці».
+   */
+  const [render, setRender] = useState<RenderStatus | null>(null);
+  // «У папці» працює лише в desktop-оболонці: міст shell.openPath
+  // відкриває провідник на теці проєкту. У браузері кнопки нема —
+  // замість неї повний шлях у title рядка з файлом.
+  const hostShell = useMemo(() => isOpenDesignHostAvailable(), []);
+
+  const pullRender = useCallback(async (): Promise<void> => {
+    try {
+      const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/render`, { cache: 'no-store' });
+      if (!resp.ok) return;
+      setRender(await resp.json() as RenderStatus);
+    } catch {
+      // демон недоступний — старт рендера скаже про це сам
+    }
+  }, [projectId]);
+
+  // Один раз на вході: якщо рендер уже йде (студію перевідкрили посеред
+  // зйомки) або post.mp4 лишився з минулого разу — показати одразу.
+  useEffect(() => {
+    void pullRender();
+  }, [pullRender]);
+
+  useEffect(() => {
+    if (render?.state !== 'running') return undefined;
+    const id = window.setInterval(() => void pullRender(), 1500);
+    return () => window.clearInterval(id);
+  }, [render?.state, pullRender]);
+
+  // Таймкоди — та сама механіка, що рендер: старт → поллер → підсумок.
+  const [align, setAlign] = useState<AlignStatus | null>(null);
+
+  const pullAlign = useCallback(async (): Promise<void> => {
+    try {
+      const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/align`, { cache: 'no-store' });
+      if (!resp.ok) return;
+      setAlign(await resp.json() as AlignStatus);
+    } catch {
+      // демон недоступний — старт вирівнювання скаже про це сам
+    }
+  }, [projectId]);
+
+  // На вході: студію могли перевідкрити посеред вирівнювання.
+  useEffect(() => {
+    void pullAlign();
+  }, [pullAlign]);
+
+  useEffect(() => {
+    if (align?.state !== 'running') return undefined;
+    const id = window.setInterval(() => void pullAlign(), 1500);
+    return () => window.clearInterval(id);
+  }, [align?.state, pullAlign]);
+
+  const startAlign = useCallback(async (audioPath: string): Promise<void> => {
+    try {
+      const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/align`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio: audioPath }),
+      });
+      const data = await resp.json().catch(() => null) as { error?: string } | null;
+      if (!resp.ok) throw new Error(data?.error ?? `HTTP ${resp.status}`);
+      setAlign({ state: 'running', startedAt: Date.now(), error: null, report: null });
+    } catch (err) {
+      setAlign({
+        state: 'error',
+        startedAt: null,
+        error: err instanceof Error ? err.message : String(err),
+        report: null,
+      });
+    }
+  }, [projectId]);
+
+  // Читаємо словник і перечитуємо, поки панель відкрита: правки руху
+  // робить агент у чаті, і прев'ю має підхоплювати їх без перезапуску —
+  // та сама механіка, що в post.json.
+  useEffect(() => {
+    let stopped = false;
+    const pull = async (): Promise<void> => {
+      try {
+        const resp = await fetch(rawUrl(projectId, 'assets/motions.json'), { cache: 'no-store' });
+        if (!resp.ok || stopped) return;
+        const next = JSON.parse(await resp.text()) as { entries?: MotionEntry[] };
+        const entries = next.entries ?? [];
+        setMotions((prev) =>
+          prev && JSON.stringify(prev) === JSON.stringify(entries) ? prev : entries);
+        // Якщо правлять саме той рух, що зараз на прев'ю, — підмінити
+        // його свіжою версією, інакше петля крутитиме стару. Підміна
+        // ЛИШЕ при реальній зміні вмісту: новий об'єкт із того самого
+        // JSON перезапускав rAF-петлю, і демо скидалось на початок
+        // кожні 2.5 с — рівно в такт поллера.
+        setMotionPreview((prev) => {
+          if (!prev) return prev;
+          const next = entries.find((e) => e.id === prev.id);
+          if (!next) return prev;
+          return JSON.stringify(next) === JSON.stringify(prev) ? prev : next;
+        });
+      } catch {
+        // файлу ще немає — панель покаже, як його завести
+      }
+    };
+    void pull();
+    if (!motionsOpen && !galleryOpen) return undefined;
+    const id = window.setInterval(() => void pull(), 2500);
+    return () => {
+      stopped = true;
+      window.clearInterval(id);
+    };
+  }, [projectId, motionsOpen, galleryOpen]);
+
+  // Петля прев'ю: демо крутиться по колу, час веде rAF, а не доріжка.
+  // Старт із 0.02, щоб ведучий (умова time >= 0.01) не блимав на стику.
+  useEffect(() => {
+    if (!motionPreview?.demo) return undefined;
+    const dur = Math.max(1, motionPreview.demo.duration);
+    let raf = 0;
+    let last = performance.now();
+    let t = 0.02;
+    const tick = (now: number): void => {
+      t += (now - last) / 1000;
+      last = now;
+      if (t >= dur) t = 0.02;
+      setDemoTime(t);
+      raf = window.requestAnimationFrame(tick);
+    };
+    raf = window.requestAnimationFrame(tick);
+    // Доріжку на паузу: два часи водночас — це два ролики в одному кадрі.
+    audioRef.current?.pause();
+    return () => window.cancelAnimationFrame(raf);
+  }, [motionPreview]);
+
+  // Режим зйомки знімає справжній ролик — прев'ю руху йому заважати не
+  // сміє: рендер, запущений під час відкритого демо, зняв би демо.
+  useEffect(() => {
+    if (shotMode) setMotionPreview(null);
+  }, [shotMode]);
+
+  // Escape закриває віконце прискорення: підкладка ловить лише мишу.
+  useEffect(() => {
+    if (!speedOpen) return undefined;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setSpeedOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [speedOpen]);
 
   // Клас вішаємо на корінь документа, а не на саму студію: панель чату
   // живе поза цим компонентом, і сховати її зсередини неможливо.
@@ -751,10 +1527,19 @@ export function PostWorkspace({
   const [pinnedBlocks, setPinnedBlocks] = useState<ReadonlySet<string>>(() => new Set());
   const [hoverBlock, setHoverBlock] = useState<string | null>(null);
 
+  // Поки доріжки немає, ролика ще немає — є задум. Показувати під нього
+  // повний кадр немає сенсу: він порожній на весь екран, а робота йде в
+  // тексті. Тому до заливки mp3 студія працює як чернетка: кадр згорнуто,
+  // на екрані лишаються сценарій і очікування звуку.
+  const isDraft = !post?.audio;
+
   const blockShell = useCallback(
     (id: string, stateClass: string) => ({
+      blockId: id,
       stateClass,
-      open: pinnedBlocks.has(id) || hoverBlock === id,
+      // Сценарій у чернетці розкритий сам: це єдине, що тут можна робити,
+      // і згорнутий заголовок змушував би відкривати його щоразу.
+      open: pinnedBlocks.has(id) || hoverBlock === id || (isDraft && id === 'script'),
       pinned: pinnedBlocks.has(id),
       onEnter: () => setHoverBlock(id),
       onLeave: () => setHoverBlock((h) => (h === id ? null : h)),
@@ -766,7 +1551,7 @@ export function PostWorkspace({
         return next;
       }),
     }),
-    [pinnedBlocks, hoverBlock],
+    [pinnedBlocks, hoverBlock, isDraft],
   );
 
   const audioFiles = useMemo(
@@ -804,6 +1589,61 @@ export function PostWorkspace({
   // під фразу нічого не підійшло.
   const [registry, setRegistry] = useState<RegistryEntry[]>([]);
   const [registryStamp, setRegistryStamp] = useState(0);
+  // Фолбек за id: стікер у post.json без file (заявка) підхоплює файл і
+  // спрайт із реєстру, щойно вони там з'явились — «Взяти в ролик» чи
+  // генерація оживляють кадр без правки post.json.
+  const registryById = useMemo(
+    () => new Map(registry.map((r) => [r.id, r])),
+    [registry],
+  );
+
+  /*
+   * Автодовезення подарунків. Агент вписує подарунок каталогу за id
+   * (gift-118, gift-118-v012), але файли робити не вміє — тричі поспіль
+   * це закінчувалось порожньою рамкою і «чому не показує». Тепер студія
+   * сама бере подарунок з каталогу, щойно бачить його id без файла;
+   * реєстровий фолбек домальовує кадр без правки post.json.
+   * По одному за раз: конвертація на проєкт однопотокова (gift.pid).
+   */
+  const giftAutoTried = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!post) return;
+    for (const s of post.stickers ?? []) {
+      // «Бракує» — це коли шлях не РЕЗОЛВИТЬСЯ у файл, а не коли поля
+      // нема: агент за прикладом зі SKILL пише file наперед, до
+      // конвертації — і саме цей випадок треба довозити.
+      const filePath = s.file ?? registryById.get(s.id)?.file;
+      if (filePath && stickerByPath.has(filePath.replace(/\\/g, '/'))) continue;
+      const m = /^(gift-\d{3})(?:-(v\d{3}))?$/.exec(s.id);
+      if (!m || giftAutoTried.current.has(s.id)) continue;
+      giftAutoTried.current.add(s.id);
+      const [, slug, variant] = m;
+      void (async () => {
+        try {
+          const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/gifts/take`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slug, ...(variant ? { variant } : {}), id: s.id }),
+          });
+          if (!resp.ok) throw new Error(String(resp.status));
+          for (let i = 0; i < 60; i += 1) {
+            await new Promise((r) => setTimeout(r, 1000));
+            const st = await fetch(`/api/projects/${encodeURIComponent(projectId)}/gifts/take`, { cache: 'no-store' })
+              .then((r) => r.json() as Promise<{ state: string }>)
+              .catch(() => null);
+            if (!st || st.state === 'running') continue;
+            break;
+          }
+          await onRefreshFiles?.();
+          setRegistryStamp((n) => n + 1);
+          setNote(`подарунок «${s.id}» довезено з каталогу`);
+        } catch {
+          // не вийшло — рамка-заявка лишається видимою, як і була
+        }
+      })();
+      break;
+    }
+  }, [post, registryById, stickerByPath, projectId, onRefreshFiles]);
   // Що відбувається всередині карток. Перевірка інакше вважає картку
   // однією нерухомою подією і свариться на «простій» там, де насправді
   // виїжджають рядки. Читаємо самі файли — дублювати кроки в post.json
@@ -812,30 +1652,73 @@ export function PostWorkspace({
   // Еталон стилю на кожен розділ: з ним звіряють манеру лінії, кант і
   // поля. Задається в реєстрі, бо це рішення про набір, не про студію.
   const [styleRefs, setStyleRefs] = useState<Record<string, string>>({});
+  //
+  // Джерела два, і порядок той самий, що в позах: проєктний реєстр має
+  // пріоритет (у ньому може бути набір, зроблений саме під цей ролик),
+  // а якщо його немає — беремо СПІЛЬНИЙ із бібліотеки.
+  //
+  // Саме цієї другої гілки бракувало: щойно створений проєкт не має
+  // `assets/stickers/`, панель писала «Реєстр не знайдено», і агент
+  // починав із чистого аркуша — тобто малював новий набір у новій
+  // манері замість того, щоб узяти наявний.
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
+    type RegistryDoc = { stickers?: RegistryEntry[]; reference?: Record<string, string> };
+
+    const parse = (text: string): RegistryDoc | null => {
+      try {
+        return JSON.parse(text) as RegistryDoc;
+      } catch {
+        return null; // битий JSON — краще показати картинки без підписів, ніж впасти
+      }
+    };
+
+    const fromProject = async (): Promise<RegistryDoc | null> => {
       try {
         const resp = await fetch(rawUrl(projectId, 'assets/stickers/stickers.json'), { cache: 'no-store' });
-        if (!resp.ok) return;
-        const data = JSON.parse(await resp.text()) as {
-          stickers?: RegistryEntry[];
-          reference?: Record<string, string>;
-        };
-        const map = new Map<string, string>();
-        for (const s of data.stickers ?? []) {
-          const label = [s.shows, s.use].filter(Boolean).join(' · ');
-          if (s.file) map.set(s.file.replace(/\\/g, '/'), label);
-          map.set(s.id, label);
-        }
-        if (!cancelled) {
-          setStickerUse(map);
-          setRegistry(data.stickers ?? []);
-          setStyleRefs(data.reference ?? {});
-        }
+        if (!resp.ok) return null;
+        return parse(await resp.text());
       } catch {
-        // немає реєстру або битий JSON — покажемо картинки без підписів
+        return null;
       }
+    };
+
+    const fromLibrary = async (): Promise<RegistryDoc | null> => {
+      try {
+        const listResp = await fetch(
+          `/api/library/assets?tag=${encodeURIComponent(`${LIBRARY_STICKER_TAG},registry`)}`,
+          { cache: 'no-store' },
+        );
+        if (!listResp.ok) return null;
+        const list = (await listResp.json()) as { assets?: { id: string; capturedAt?: number }[] };
+        // Реєстрів під тегом може бути КІЛЬКА: заливка не замінює попередній
+        // ассет, а додає новий (перевірено 08-09 — після дозаливки їх стало
+        // два, на 19 і на 23 записи). Брати `[0]` означало покладатись на
+        // порядок видачі API: сьогодні він новіший першим, а завтра панель
+        // тихо показала б старий набір, і агент знову малював би наявне.
+        const assetId = [...(list.assets ?? [])]
+          .sort((a, b) => (b.capturedAt ?? 0) - (a.capturedAt ?? 0))[0]?.id;
+        if (!assetId) return null;
+        const rawResp = await fetch(libraryRawUrl(assetId), { cache: 'no-store' });
+        if (!rawResp.ok) return null;
+        return parse(await rawResp.text());
+      } catch {
+        return null;
+      }
+    };
+
+    void (async () => {
+      const data = (await fromProject()) ?? (await fromLibrary());
+      if (!data || cancelled) return;
+      const map = new Map<string, string>();
+      for (const s of data.stickers ?? []) {
+        const label = [s.shows, s.use].filter(Boolean).join(' · ');
+        if (s.file) map.set(s.file.replace(/\\/g, '/'), label);
+        map.set(s.id, label);
+      }
+      setStickerUse(map);
+      setRegistry(data.stickers ?? []);
+      setStyleRefs(data.reference ?? {});
     })();
     return () => {
       cancelled = true;
@@ -1055,6 +1938,53 @@ export function PostWorkspace({
     };
   }, [projectId]);
 
+  /*
+   * Стан ролика міняє не тільки панель — його ж пише агент із чату.
+   * Доти файл читався рівно один раз, на відкритті проєкту: агент
+   * складав увесь ролик, а в кадрі лишалась порожнеча, і єдиним способом
+   * побачити роботу було перезапустити застосунок.
+   *
+   * Порівнюємо ВМІСТ, а не час файлу: збереження з самої панелі теж
+   * перезаписує post.json, і на кожен свій же запис кадр перемальовувався
+   * б заново. Однакові дані — стан не чіпаємо, тож смикання немає.
+   *
+   * У режимі зйомки опитування вимкнене: знімальник перемотує кадр по
+   * секундах, і підміна стану посеред зйомки дала б рвані кадри.
+   */
+  useEffect(() => {
+    if (shotMode) return undefined;
+    let stopped = false;
+    const tick = async (): Promise<void> => {
+      if (document.visibilityState !== 'visible') return;
+      try {
+        const resp = await fetch(rawUrl(projectId, POST_FILE), { cache: 'no-store' });
+        if (!resp.ok || stopped) return;
+        const text = await resp.text();
+        const next = JSON.parse(text) as PostSpec;
+        setPost((prev) => {
+          if (prev && JSON.stringify(prev) === JSON.stringify(next)) return prev;
+          // Файли теж перечитуємо — але тільки коли стан справді змінився:
+          // разом із розміткою приходять нові стікери й картки, і без
+          // свіжого списку кадр малював би пропуски замість картинок.
+          void onRefreshFiles?.();
+          return next;
+        });
+      } catch {
+        // недописаний файл або збій мережі — наступний тік підбере
+      }
+    };
+    const id = window.setInterval(() => void tick(), 2500);
+    const onFocus = () => void tick();
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      stopped = true;
+      window.clearInterval(id);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, [projectId, shotMode, onRefreshFiles]);
+
   const save = useCallback(
     async (next: PostSpec, message: string) => {
       setBusy(true);
@@ -1094,8 +2024,14 @@ export function PostWorkspace({
         },
         stale ? 'доріжку змінено, таймкоди скинуто' : `доріжка · ${clock(duration)}`,
       );
+      // Доріжка без слів — мертва: субтитрам, стікерам і рендеру нема до
+      // чого кріпитись. Тому вирівнювання стартує само; той самий файл
+      // із наявними словами не чіпаємо.
+      if ((stale || post.words.length === 0) && post.script.trim()) {
+        void startAlign(path);
+      }
     },
-    [post, projectId, save],
+    [post, projectId, save, startAlign],
   );
 
   // Заливка mp3 просто тут: раніше кнопка кидала у файловий воркспейс,
@@ -1257,51 +2193,18 @@ export function PostWorkspace({
   // Рахується ДО раннього виходу нижче: хуки не можна лишати за
   // умовним return — кількість між рендерами розійдеться, і React
   // впаде з «Rendered more hooks than during the previous render».
-  const captionChunks = useMemo(() => {
-    // Рішення приймає ширина, а не кількість. «Це і є» — три слова, але
-    // п'ять символів: закривати на них групу означало б лишити пів
-    // рядка порожнім, а наступне слово («навчання») відкинути в новий
-    // кадр. Тому стеля за словами висока, а справжня межа — довжина.
-    const MAX_WORDS = 4;
-    // Міряно, не вгадано: при кеглі 6.9 % ширини кадру рядок із 20
-    // символів займає 1252 px проти 756 доступних. Тринадцять — стеля,
-    // за якої найдовша реальна група ще вміщається без стискання.
-    //
-    // Стискати рядок під ширину не можна: сусідні кадри отримали б різний
-    // кегль, і субтитр «дихав» би розміром від групи до групи. У
-    // референсі кегль сталий, а короткі група — саме тому.
-    const MAX_CHARS = 13;
-    const chunks: WordTiming[][] = [];
-    let cur: WordTiming[] = [];
-    let len = 0;
-    for (const w of post?.words ?? []) {
-      // Довжину рахуємо за очищеним словом, бо саме воно піде в кадр.
-      // Слова з самої пунктуації в групу не беремо взагалі: вони з’їдали
-      // б місце й ламали лічильник, нічого не показуючи.
-      const wl = cleanCaption(w.word).length;
-      if (wl === 0) continue;
-      // +1 на пробіл між словами — інакше рядок із п'яти коротких слів
-      // рахується вужчим, ніж малюється.
-      const cost = cur.length > 0 ? wl + 1 : wl;
-      if (cur.length >= MAX_WORDS || (cur.length > 0 && len + cost > MAX_CHARS)) {
-        chunks.push(cur);
-        cur = [];
-        len = 0;
-      }
-      cur.push(w);
-      len += cur.length > 1 ? cost : wl;
-      // Кінець речення закриває групу. Без цього рядок склеює хвіст
-      // однієї фрази з початком наступної («не соромно | це і є») і
-      // ріже думку там, де її треба тримати цілою.
-      if (/[.!?…]$/.test(w.word.trim())) {
-        chunks.push(cur);
-        cur = [];
-        len = 0;
-      }
-    }
-    if (cur.length > 0) chunks.push(cur);
-    return chunks;
-  }, [post?.words]);
+  const captionChunks = useMemo(() => chunkCaptionWords(post?.words ?? []), [post?.words]);
+
+  // Демо руху зі словника: поки воно відкрите, кадр малює цей мініролик
+  // замість post.json. Розгортається тут, а не в обробнику кліку, щоб
+  // правка demo агентом (поллер вище підміняє motionPreview) одразу
+  // перебудовувала і кадр.
+  const previewPost = useMemo(
+    () => (motionPreview?.demo ? demoPost(motionPreview.demo) : null),
+    [motionPreview],
+  );
+
+
 
   if (!post) {
     return (
@@ -1312,8 +2215,59 @@ export function PostWorkspace({
   }
 
   const stage = postStage(post);
+
+  /*
+   * Смуга етапів: де зараз ролик.
+   *
+   * Стан кожного кроку читається з САМИХ ДАНИХ, а не з окремого поля
+   * прогресу. Поле довелось би комусь оновлювати, і воно розійшлося б із
+   * дійсністю рівно тоді, коли на нього почали б покладатись: агент
+   * зробив роботу, а смуга каже «чекає». Тут навпаки — з'явились слова,
+   * крок закрився сам.
+   *
+   * Поточний — перший незакритий: пайплайн лінійний, і робота над
+   * пізнім кроком без раннього однаково нічого не дасть.
+   */
+  const stages = (() => {
+    const items = [
+      { key: 'audio', title: 'Звук', hint: 'доріжка залита', done: Boolean(post.audio) },
+      { key: 'words', title: 'Таймкоди', hint: 'слова з часом', done: post.words.length > 0 },
+      { key: 'scenes', title: 'Речення', hint: 'нарізка на кадри', done: (post.scenes?.length ?? 0) > 0 },
+      { key: 'beats', title: 'Розбір', hint: 'пози й ритм', done: post.beats.length > 0 },
+      {
+        key: 'assets',
+        title: 'Кадр',
+        hint: 'стікери й картки',
+        done: (post.stickers?.length ?? 0) > 0 || (post.cards?.length ?? 0) > 0,
+      },
+      {
+        key: 'render',
+        title: 'Рендер',
+        hint: 'готовий mp4',
+        done: files.some((f) => /(^|[\\/])post\.mp4$/i.test(f.name)),
+      },
+    ];
+    const current = items.findIndex((s) => !s.done);
+    return items.map((s, i) => ({
+      ...s,
+      state: s.done ? 'done' : i === current ? 'current' : 'wait',
+    }));
+  })();
+
   const preset = PRESETS[post.preset] ?? PRESETS[DEFAULT_PRESET];
   const duration = post.audio?.duration ?? 0;
+
+  /*
+   * Що зараз малює кадр: ролик або демо руху зі словника.
+   *
+   * Кадрові обчислення нижче читають framePost/frameTime, а панелі —
+   * як і раніше post/time: прев'ю руху підміняє лише картинку в рамці,
+   * не стан проєкту. Час демо веде rAF-петля, не доріжка.
+   */
+  const framePost = previewPost ?? post;
+  const frameTime = previewPost ? demoTime : time;
+  const frameChunks = previewPost ? chunkCaptionWords(framePost.words) : captionChunks;
+
   const activeWordIndex = wordIndexAt(post.words, time);
   const activeWord = activeWordIndex < 0 ? null : post.words[activeWordIndex]!;
 
@@ -1323,25 +2277,25 @@ export function PostWorkspace({
   // розійшлася. Через це на кожному тире кадр порожнів — індекс вказував
   // у нікуди, хоча фраза тривала.
   const activeChunk = (() => {
-    if (post.words.length === 0 || captionChunks.length === 0) return null;
+    if (framePost.words.length === 0 || frameChunks.length === 0) return null;
     let found: WordTiming[] | null = null;
-    for (const chunk of captionChunks) {
-      if (chunk[0]!.start <= time) found = chunk;
+    for (const chunk of frameChunks) {
+      if (chunk[0]!.start <= frameTime) found = chunk;
       else break;
     }
     if (!found) return null;
     // Довга тиша після останнього слова групи звільняє кадр — але тільки
     // якщо попереду ще щось є. Фінальну групу тримаємо до кінця доріжки.
     const last = found[found.length - 1]!;
-    const isFinal = found === captionChunks[captionChunks.length - 1];
-    if (!isFinal && time > last.end + CAPTION_HOLD_S) {
-      const nextIdx = captionChunks.indexOf(found) + 1;
-      const next = captionChunks[nextIdx];
-      if (next && time < next[0]!.start - CAPTION_HOLD_S) return null;
+    const isFinal = found === frameChunks[frameChunks.length - 1];
+    if (!isFinal && frameTime > last.end + CAPTION_HOLD_S) {
+      const nextIdx = frameChunks.indexOf(found) + 1;
+      const next = frameChunks[nextIdx];
+      if (next && frameTime < next[0]!.start - CAPTION_HOLD_S) return null;
     }
     return found;
   })();
-  const activeBeat = beatAt(post.beats, time);
+  const activeBeat = beatAt(framePost.beats, frameTime);
   // У біті поза записана так, як її призначили: id з реєстру («wave»),
   // іменем файлу або повним шляхом. Тому картку шукаємо за всіма
   // полями одразу — інакше кадр лишається порожнім, хоча біт із позою
@@ -1361,7 +2315,9 @@ export function PostWorkspace({
 
   const scenes = post.scenes ?? [];
   const planned = scenes.filter((s) => s.plan != null).length;
-  const findings = checkPost(post, cardSteps);
+  // Без useMemo навмисно: цей рядок стоїть ПІСЛЯ умовного return вище,
+  // і хук тут ламав би правило хуків. Дванадцять id — не та ціна.
+  const findings = checkPost(post, cardSteps, (motions ?? []).map((m) => m.id));
 
 
 
@@ -1404,6 +2360,141 @@ export function PostWorkspace({
     'ЗВІТ — трьома рядками: що змінилось, чим стало краще, що перевірити оком.',
   ].join('\n'));
 
+  /*
+   * Конструктор анімацій: три готові запити в чат.
+   *
+   * Сенс кнопок — контекст без витрат: агент одразу знає, який запис
+   * правиться, де лежить файл і що прев'ю оновиться саме звідти. Інакше
+   * кожна сесія починалася б із пояснень, де ми і що робимо.
+   */
+  const askMotionEdit = (m: MotionEntry): void => ask([
+    `Конструктор анімацій. Працюємо над рухом «${m.id}» зі словника.`,
+    '',
+    `Файл: assets/motions.json → запис id "${m.id}". Його demo — мініролик,`,
+    'який студія крутить у кадрі по колу; файл перечитується кожні ~3 с,',
+    'тож твоя правка з\'являється в прев\'ю сама, без перезапуску.',
+    '',
+    'Я казатиму правки словами («вище», «повільніше», «бейдж раніше»,',
+    '«хай заходить збоку»). Перекладай їх у поля demo: word / lead / hold /',
+    'enter / badges[].at / label / scenes[].continues / beats[].pose — і',
+    'зберігай файл. Тексти при цьому лиши демонстраційними.',
+    '',
+    'Межі можливого — references/motion-library.md, розділ «Чого студія',
+    'не вміє» (у .od-skills/create-instagram-post-*/references/). Якщо я',
+    'прошу неможливе — скажи прямо і запропонуй найближчий досяжний рух.',
+    '',
+    'Коли скажу «готово»: онови прозовий опис запису (enter/inside/exit/',
+    'axes/fixed) у тому ж motions.json і перенеси зміни у джерело плагіна',
+    'D:\\od-plugins\\create-instagram-post\\references\\motions.json, щоб рух',
+    'дістався й іншим роликам. post.json ролика НЕ чіпай і НЕ рендери.',
+  ].join('\n'));
+
+  const askMotionNew = (): void => ask([
+    'Конструктор анімацій. Створюємо НОВИЙ рух у словнику.',
+    '',
+    'Спершу спитай мене одним повідомленням: (1) склад кадру — скільки',
+    'предметів, чи є картка, чи бейджі; (2) що відбувається — трьома',
+    'фазами: як заходить → що робить у кадрі → як іде.',
+    '',
+    'Далі додай запис у assets/motions.json: id (kebab-case), title, pick',
+    '(одне питання-дискримінатор для таблиці добору), enter/inside/exit,',
+    'axes (що міняти під речення), fixed (що не чіпати й чому), avoid — і',
+    'demo: мініролик на 3–6 с (words із таймінгами, scenes, stickers з',
+    'наявного набору assets/stickers/, за потреби beats з позою).',
+    'Прев\'ю в студії підхопить файл саме.',
+    '',
+    'Межі — references/motion-library.md → «Чого студія не вміє». Рух,',
+    'якого студія не вміє, у словник не потрапляє: запропонуй найближчий',
+    'можливий і скажи, чого саме бракує студії.',
+    '',
+    'Коли я скажу «готово» — допиши рух у motion-library.md (рядок у',
+    'таблицю добору + повний запис) і поверни ОБИДВА файли в джерело',
+    'плагіна D:\\od-plugins\\create-instagram-post\\references\\.',
+  ].join('\n'));
+
+  // Словник — копія двох файлів із плагіна; демон робить її сам, чат
+  // тут був марнотратством. Поллер motions підхопить файл за ~3 с.
+  const seedMotions = async (): Promise<void> => {
+    try {
+      const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/motions/seed`, { method: 'POST' });
+      const data = await resp.json().catch(() => null) as { error?: string; cards?: number } | null;
+      if (!resp.ok) throw new Error(data?.error ?? `HTTP ${resp.status}`);
+      setNote(`словник заведено${typeof data?.cards === 'number' ? ` · демо-карток: ${data.cards}` : ''}`);
+    } catch (err) {
+      setNote(`словник не завівся: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  /*
+   * Видалити рух зі словника проєкту.
+   *
+   * Пише той самий assets/motions.json, який читає поллер, — список і
+   * галерея оновляться самі. Джерело плагіна навмисно не чіпаємо:
+   * видалення тут — «прибрати з цього проєкту», а не з набору назавжди;
+   * повернути можна кнопкою «Завести словник».
+   */
+  const deleteMotion = async (id: string): Promise<void> => {
+    if (!motions) return;
+    const next = motions.filter((m) => m.id !== id);
+    try {
+      const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'assets/motions.json',
+          content: JSON.stringify({ version: 1, entries: next }, null, 1),
+        }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      setMotions(next);
+      setMotionPreview((prev) => (prev?.id === id ? null : prev));
+      setNote(`рух «${id}» прибрано зі словника проєкту`);
+    } catch (err) {
+      setNote(`не видалив: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  /*
+   * Старт рендера — напряму в демон, без чату. Раніше тут збирався
+   * текст-інструкція агенту з командою render.py; тепер ті самі
+   * аргументи їдуть у POST, а демон запускає той самий скрипт сам.
+   * Обидві кнопки (центр студії і блок 9) кличуть саме цю функцію —
+   * два шляхи до одного результату не сміють розійтись.
+   */
+  const startRender = async (): Promise<void> => {
+    // Без words студія не віддасть __postStudio.ready, і render.py висів
+    // би 60 с до таймаута з глухим «код 1» — чесніше не пускати старт.
+    if (!post?.audio || post.words.length === 0) return;
+    try {
+      const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/render`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: window.location.origin,
+          audio: post.audio.path,
+          fps: CANVAS.fps,
+          speed: post.speed ?? 1,
+        }),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => null) as { error?: string } | null;
+        throw new Error(body?.error ?? `HTTP ${resp.status}`);
+      }
+      setRender((prev) => ({
+        state: 'running',
+        startedAt: Date.now(),
+        finishedAt: null,
+        exitCode: null,
+        error: null,
+        tail: '',
+        out: prev?.out ?? null,
+        dir: prev?.dir ?? null,
+      }));
+    } catch (err) {
+      setNote(`рендер не стартував: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   // Замовлення бракуючого — одним текстом, бо кнопка стоїть у двох
   // місцях: у шапці блоку і під самим списком заявок. У шапці її легко
   // не помітити, а потрібна вона саме там, де видно брифи.
@@ -1440,17 +2531,68 @@ export function PostWorkspace({
     'Розбір процесу лишай у полях реєстру, не в чаті.',
   ].join('\n'));
   const stickers = post.stickers ?? [];
-  const spans = stickerSpans(stickers, post.words);
-  const liveStickers = stickerLayout(spans, time, preset.stickers.maxWidthPct);
+  // Картки оголошені тут, а не нижче: стеля життя стікера дивиться і на
+  // них — картка займає ту саму смугу кадру, що й предмет.
+  const cards = post.cards ?? [];
+  // Кадр малює framePost: у прев'ю руху це демо, у звичайній роботі —
+  // той самий post, тож нижче все читається однаково.
+  const frameStickers = framePost.stickers ?? [];
+  const frameCards = framePost.cards ?? [];
+  const spans = stickerSpans(frameStickers, framePost.words, framePost.scenes ?? [], frameCards);
+  const liveStickers = stickerLayout(spans, frameTime, preset.stickers.maxWidthPct);
   // Удар спільний на весь кадр: на акцентному слові смикаються ВСІ живі
   // стікери разом. Один смикається — це збіг, усі разом — це такт.
-  const framePunch = accentPunch(time, post.words);
+  const framePunch = accentPunch(frameTime, framePost.words);
   // Спільна лінія низу зони стікерів: рахується з максимальної
   // ширини, тому не залежить від того, скільки предметів у кадрі.
   const stickerBase = preset.stickers.top
     + preset.stickers.maxWidthPct * (CANVAS.w / CANVAS.h);
-  const cards = post.cards ?? [];
-  const activeCard = cardAt(cards, post.words, time);
+  const activeCard = cardAt(frameCards, framePost.words, frameTime);
+  /*
+   * Слот картки колекційного. Блок nft-card-*.html генерує демон із
+   * відомою геометрією, тож позицію подарунка всередині картки студія
+   * знає без домовленостей у даних: він стає в слот замість того, щоб
+   * ховатись під карткою (звичайні картки стікерів не терплять).
+   */
+  const nftSlot = activeCard && isNftCard(activeCard.card.file) ? NFT_CARD_SLOT : null;
+  // Наскільки подарунок заповнює слот. У клієнті стікер займає майже
+  // весь слот, тож лишаємо тільки тонке поле.
+  const NFT_SLOT_FILL = 0.98;
+  /*
+   * Подарунок у слоті їде РАЗОМ із карткою: та сама функція руху, що
+   * малює саму картку (приїзд справа, вихід). Інакше картка в'їжджає, а
+   * предмет стоїть на місці — вони роз'їжджаються посеред появи.
+   */
+  const nftCardMotion = nftSlot && activeCard
+    ? cardMotion(frameTime - activeCard.start, activeCard.card.hold)
+    : null;
+  /*
+   * Коробка подарунка в слоті — з МАСШТАБОМ картки.
+   *
+   * Картка в'їжджає від 97 % і росте від свого верхнього краю. Без цього
+   * множника предмет перші 0.42 с більший за власний слот на 6 px і
+   * сидить на 5 px нижче — рівно те розсинхронення, від якого пара
+   * перестає читатись як одна річ. Відлік той самий, що в картки:
+   * центр по ширині кадру, верх — верх шару.
+   */
+  const nftBox = nftSlot && (() => {
+    const k = nftCardMotion?.scale ?? 1;
+    const w = nftSlot.width * NFT_SLOT_FILL * k;
+    const mid = 0.5 + (nftSlot.left + nftSlot.width / 2 - 0.5) * k;
+    return {
+      left: mid - w / 2,
+      width: w,
+      // Вертикаль картки (`motion.y`) — у той самий бік і в тих самих
+      // одиницях, що в `CardLayer`. Без цього доданка предмет тримає
+      // свою висоту, поки картка їде своєю: на виході вона піднімається
+      // на 3 %, і подарунок з неї висипається.
+      top: preset.stickers.top
+        + (nftCardMotion?.y ?? 0) / 100
+        + (nftSlot.dropPx + (nftSlot.topPx + nftSlot.sizePx * (1 - NFT_SLOT_FILL) * 0.75) * k)
+          * nftSlot.pxToHeight,
+      height: nftSlot.sizePx * NFT_SLOT_FILL * k * nftSlot.pxToHeight,
+    };
+  })();
   // Слова, на яких висить стікер: у стрічці транскрипції вони отримують
   // позначку, тож видно розкладку картинок по всьому тексту одразу.
   const stickerWords = new Set(stickers.map((s) => s.word));
@@ -1498,6 +2640,65 @@ export function PostWorkspace({
     else setNote('чат недоступний — відкрий режим усередині проєкту');
   };
 
+  /*
+   * Рядок результату рендера — один на обидва місця (центр студії і
+   * блок 9), щоб файл, розмір і дії ніколи не розходились. Показуємо
+   * і старий post.mp4 теж: «відкрити останній ролик» — щоденна дія,
+   * якій нема чого чекати нового рендера.
+   *
+   * Під час running рядок схований: ffmpeg відкриває вихід із -y
+   * (truncate) і дописує на ходу — «Відкрити» вело б на недописаний
+   * файл. Після error старий файл лишаємось показувати, але з міткою:
+   * mtime до startedAt означає, що це НЕ результат цього рендера.
+   */
+  const outIsStale = render?.out != null
+    && render.startedAt != null
+    && render.out.mtimeMs < render.startedAt;
+  const renderRow = (render?.state === 'error' || (render?.out && render.state !== 'running')) ? (
+    <>
+      {render?.state === 'error' ? (
+        <div
+          className="post-render-row is-error"
+          title={render.tail ? render.tail.slice(-600) : undefined}
+        >
+          рендер упав: {render.error ?? 'див. .cache/render.log'}
+        </div>
+      ) : null}
+      {render?.out ? (
+        <div
+          className="post-render-row"
+          title={render.dir
+            ? `${render.dir}${render.dir.includes('\\') ? '\\' : '/'}${render.out.name}`
+            : render.out.name}
+        >
+          <span className="post-render-row__file">
+            {render.out.name}{render.state === 'error' && outIsStale ? ' (старий, до цього рендера)' : ''}
+            {' '}· {(render.out.size / (1024 * 1024)).toFixed(1)} МБ · {fileAge(render.out.mtimeMs)}
+          </span>
+          <a
+            className="post-block__pick"
+            href={rawUrl(projectId, render.out.name)}
+            target="_blank"
+            rel="noreferrer"
+            title="Відкрити готовий mp4"
+          >
+            Відкрити
+          </a>
+          {hostShell ? (
+            <button
+              type="button"
+              className="post-block__pick"
+              title="Показати теку проєкту з post.mp4 у провіднику"
+              onClick={() => void openHostProjectPath(projectId)}
+            >
+              У папці
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  ) : null;
+
   return (
     <div className="post-ws">
       <div className="post-ws__bar">
@@ -1512,7 +2713,7 @@ export function PostWorkspace({
         {onExit ? <button type="button" className="btn" onClick={onExit}>Файли</button> : null}
       </div>
 
-      <div className={`post-ws__body${shotMode ? ' is-shot' : ''}`}>
+      <div className={`post-ws__body${shotMode ? ' is-shot' : ''}${isDraft ? ' is-draft' : ''}`}>
         <div className="post-ws__stage">
           <div
             className="post-ws__frame"
@@ -1548,31 +2749,135 @@ export function PostWorkspace({
             */}
             {/* Картка і стікери — в одній смузі, тому разом не показуємо:
                 картка широка, стікери поверх неї читались би як сміття. */}
+            {/* Слот картки колекційного: подарунок ставиться в нього,
+                а не поруч. Ознака — файл nft-card-*.html, який генерує
+                демон із відомою геометрією (NFT_CARD_SLOT). */}
+            {/*
+              Бейджі картки колекційного — ОКРЕМИМ шаром і ПЕРЕД карткою
+              в дереві, тобто під нею.
+
+              Всередині стікера їм не місце: стікер стоїть у слоті, тобто
+              вже НАД карткою, і плашка звідти лягала поверх неї. А
+              піти вбік, як у звичайного предмета, вона не може —
+              найкоротша плашка ролика ширша за саму картку. Лишається
+              одне місце, над карткою, і одна плашка за раз: нова
+              виходить з-за верхнього краю, попередня туди ж і йде.
+            */}
+            {nftSlot ? (
+              <div className="post-ws__nft-badges" aria-hidden>
+                {liveStickers.flatMap((s) => liveBadges(
+                  s.sticker.badges, framePost.words, frameTime,
+                ).map(({ badge, age, rankSmooth }) => {
+                  const b = badgePopSlide(age);
+                  const k = nftCardMotion?.scale ?? 1;
+                  // Верх картки в частках кадру — з тим самим рухом і
+                  // масштабом, що й сама картка: плашка мусить їхати з
+                  // нею, а не жити у власних координатах.
+                  const cardTop = preset.stickers.top
+                    + (nftCardMotion?.y ?? 0) / 100
+                    + (nftSlot.dropPx + nftSlot.cardTopPx * k) * nftSlot.pxToHeight;
+                  // Сховатись = з'їхати вниз на свою висоту плюс той
+                  // просвіт, на який стоїш вище краю.
+                  const hide = (BADGE_H_PX + nftSlot.badgeGapPx) * nftSlot.pxToHeight;
+                  // Витіснення новішою плашкою — та сама дорога, що й
+                  // виліт: не вбік, а назад за картку.
+                  const back = Math.min(rankSmooth, 1);
+                  const y = cardTop - nftSlot.badgeGapPx * nftSlot.pxToHeight
+                    + (b.lift + back) * hide;
+                  return (
+                    <span
+                      key={`${badge.at}-${badge.text}`}
+                      className={`post-ws__badge${badge.tone ? ` is-${badge.tone}` : ''}`}
+                      style={{
+                        left: '50%',
+                        bottom: `${(1 - y) * 100}%`,
+                        opacity: b.opacity * (1 - back),
+                        transform: `translateX(-50%) scale(${b.scale})`,
+                      }}
+                    >
+                      {badge.text}
+                    </span>
+                  );
+                }))}
+              </div>
+            ) : null}
+
             {activeCard ? (
               <CardLayer
                 key={`${activeCard.card.id}-${activeCard.start.toFixed(3)}`}
                 src={rawUrl(projectId, activeCard.card.file)}
                 hold={activeCard.card.hold}
                 start={activeCard.start}
-                time={time}
-                top={preset.stickers.top}
-                words={post.words}
+                time={frameTime}
+                // Картка колекційного стоїть нижче за звичайну: у неї на
+                // всю висоту предмет із бейджами, і на верхній межі зони
+                // вона тиснеться до безпечної лінії Instagram. Зсув той
+                // самий, що й у подарунка в слоті, — з одного числа.
+                top={preset.stickers.top
+                  + (nftSlot ? nftSlot.dropPx * nftSlot.pxToHeight : 0)}
+                words={framePost.words}
+                sticker={activeCard.card.sticker ?? null}
+                stickerUrl={activeCard.card.sticker
+                  ? rawUrl(projectId, activeCard.card.sticker.file)
+                  : null}
               />
             ) : null}
 
-            {(activeCard ? [] : liveStickers).map((s, i) => {
-              const file = s.sticker.file
-                ? stickerByPath.get(s.sticker.file.replace(/\\/g, '/')) ?? null
+            {/* Зв'язки між предметами — під стікерами, щоб дуга йшла
+                з-за картинок, а не лежала поверх них. */}
+            {!activeCard && liveStickers.length > 1 ? (
+              <StickerLinksLayer
+                spans={liveStickers}
+                time={frameTime}
+                zoneTop={preset.stickers.top}
+                zoneBottom={stickerBase}
+              />
+            ) : null}
+
+            {/* Картка і стікери зазвичай не співіснують (обидва в одній
+                смузі). Виняток — картка колекційного: у неї є СЛОТ, і
+                подарунок стоїть у ньому окремим анімованим шаром. */}
+            {(activeCard && !nftSlot ? [] : liveStickers).map((s, i) => {
+              const reg = registryById.get(s.sticker.id);
+              const filePath = s.sticker.file ?? reg?.file;
+              const file = filePath
+                ? stickerByPath.get(filePath.replace(/\\/g, '/')) ?? null
                 : null;
-              const drift = stickerDrift(i);
-              const entry = stickerEnter(s.sticker.enter, time - s.start);
-              const badges = liveBadges(s.sticker.badges, post.words, time);
+              const sprite = s.sticker.sprite ?? reg?.sprite;
+              // Дрейф за СТАЛИМ ключем, а не за місцем у списку живих.
+              // Доти брався індекс у поточному масиві: помирав сусід —
+              // індекс з'їжджав, і предмет посеред власного життя міняв
+              // кут нахилу, період і бік похитування.
+              const drift = stickerDrift(frameStickers.indexOf(s.sticker));
+              // У слоті картки предмет не має власного життя: він
+              // з'являється разом із карткою і стоїть. Вхід, дрейф і
+              // удар прибрані — рухається лише сама анімація подарунка.
+              const entry = nftSlot
+                ? { x: 0, y: 0, scale: 1, opacity: 1 }
+                : stickerEnter(s.sticker.enter, frameTime - s.start);
+              const badges = liveBadges(s.sticker.badges, framePost.words, frameTime);
               // Вихід рахуємо часом, а не CSS-переходом: перехід згладив
               // би удар, який приходить у ті самі 0.15 с, і замість
               // смикання вийшло б розмите сповзання.
               const outP = Math.min(
-                Math.max((time - (s.end - STICKER_EXIT_LEAD_S)) / STICKER_EXIT_LEAD_S, 0),
+                Math.max((frameTime - (s.end - STICKER_EXIT_LEAD_S)) / STICKER_EXIT_LEAD_S, 0),
                 1,
+              );
+              // Вихід — власна вісь предмета (flip-out / drop-out / …),
+              // комбінується з входом множенням і додаванням: обірваний
+              // вхід і ранній вихід складаються без стрибків.
+              const fx = stickerExit(s.sticker.exit, outP);
+              // Коробка предмета квадратна за шириною, але зона стікерів
+              // нижча за квадрат одиночного (він більший за максимум пари).
+              // Тому висоту обрізаємо по зоні: інакше предмет вилазить за
+              // її верх, а бейдж над ним — ще вище, під шапку Instagram.
+              // Коли бейджі в предмета є, зона додатково коротшає на їхню
+              // висоту. Рахуємо з УСІХ бейджів стікера, а не з живих зараз:
+              // від живих коробка міняла б розмір прямо в кадрі.
+              const room = (s.sticker.badges?.length ?? 0) > 0 ? BADGE_ROOM : 0;
+              const box = Math.min(
+                s.width * CANVAS.w / CANVAS.h,
+                stickerBase - preset.stickers.top - room,
               );
               return (
                 <div
@@ -1582,16 +2887,41 @@ export function PostWorkspace({
                   // появу вдруге на кожній перекладці.
                   key={`${s.sticker.id}-${s.start.toFixed(3)}`}
                   className={`post-ws__sticker${
-                    time > s.end - STICKER_EXIT_LEAD_S ? ' is-out' : ''
-                  }${kindOf.get(s.sticker.id) === 'screen' ? ' is-still' : ''}`}
+                    frameTime > s.end - STICKER_EXIT_LEAD_S ? ' is-out' : ''
+                  }${nftSlot || s.sticker.still || kindOf.get(s.sticker.id) === 'screen' ? ' is-still' : ''}${nftSlot ? ' is-slot' : ''}`}
                   style={{
-                    top: `${(stickerBase - s.width * CANVAS.w / CANVAS.h) * 100}%`,
-                    left: `${s.left * 100}%`,
-                    width: `${s.width * 100}%`,
-                    ['--enter-x' as string]: `${entry.x * 100}%`,
-                    ['--enter-y' as string]: `${entry.y * 100}%`,
-                    ['--enter-scale' as string]: `${entry.scale}`,
-                    opacity: entry.opacity,
+                    // У слоті картки — координати слота; інакше звичайна
+                    // розкладка зони стікерів.
+                    // У слоті картки подарунок трохи МЕНШИЙ за сам слот
+                    // і опущений: впритул він тисне на стрічку зверху, а
+                    // в оригіналі між ним і краями лишається повітря.
+                    top: `${(nftBox ? nftBox.top : stickerBase - box) * 100}%`,
+                    height: `${(nftBox ? nftBox.height : box) * 100}%`,
+                    left: `${(nftBox ? nftBox.left : s.left) * 100}%`,
+                    width: `${(nftBox ? nftBox.width : s.width) * 100}%`,
+                    // Зсув картки в кадрі — у відсотках ширини КАДРУ, а
+                    // слот вужчий, тож переводимо у відсотки власної
+                    // ширини предмета, інакше він відстане від картки.
+                    ...(nftCardMotion ? {
+                      marginLeft: `${nftCardMotion.x}%`,
+                    } : {}),
+                    ['--enter-x' as string]: `${(entry.x + fx.x) * 100}%`,
+                    ['--enter-y' as string]: `${(entry.y + fx.y) * 100}%`,
+                    ['--enter-scale' as string]: `${entry.scale * fx.scaleMul}`,
+                    // Прозорість множить вхід на вихід ТУТ, інлайново.
+                    // Правило `.is-out { opacity: calc(1 - var(--out)) }`
+                    // існувало, але не діяло жодного разу: інлайновий
+                    // стиль сильніший за таблицю, а stickerEnter завжди
+                    // повертає 1. Через це предмет не гаснув — стискався
+                    // на 12 % і зникав стрибком на останньому кадрі.
+                    opacity: entry.opacity * fx.opacity * (nftCardMotion?.opacity ?? 1),
+                    // Нові осі ефектів: нейтральні значення — no-op у
+                    // transform-ланцюгу, стилю вони не додають нічого.
+                    ['--fx-rot' as string]: `${(entry.rot ?? 0) + fx.rot}deg`,
+                    ['--fx-ry' as string]: `${(entry.ry ?? 0) + fx.ry}deg`,
+                    ['--fx-sx' as string]: `${(entry.sx ?? 1) * fx.sx}`,
+                    ['--fx-sy' as string]: `${(entry.sy ?? 1) * fx.sy}`,
+                    ['--fx-blur' as string]: `${Math.max(entry.blur ?? 0, fx.blur)}px`,
                     // Кут, тривалість і фаза дрейфу — свої в кожного.
                     // Однакові числа читались як одна намальована
                     // картинка, що гойдається цілком.
@@ -1599,12 +2929,20 @@ export function PostWorkspace({
                     ['--drift-dur' as string]: drift.dur,
                     ['--drift-delay' as string]: drift.delay,
                     ['--drift-dir' as string]: drift.dir,
-                    // Вихід: предмет сідає й гасне, а не блимає. Довший
-                    // за вхід навмисно — те, що йде, має встигнути піти.
-                    ['--punch' as string]: `${framePunch - 0.12 * outP}`,
+                    // Удар акценту лишився чистим: стиск виходу переїхав
+                    // у stickerExit('shrink') — одне джерело правди.
+                    ['--punch' as string]: `${nftSlot ? 0 : framePunch}`,
                     ['--out' as string]: `${outP}`,
                   }}
                 >
+                  {s.sticker.ornament ? (
+                    <StickerOrnamentLayer
+                      ornament={s.sticker.ornament}
+                      age={frameTime - s.start}
+                      time={frameTime}
+                      seed={frameStickers.indexOf(s.sticker)}
+                    />
+                  ) : null}
                   {/* Салют летить ПІД картинкою і поза її коробкою: іскри
                       мають вилітати з-за предмета, а не лежати на ньому. */}
                   <div className="post-ws__sticker-in">
@@ -1612,7 +2950,17 @@ export function PostWorkspace({
                         різні transform, і на одному елементі другий
                         просто затер би перший. */}
                     <span className="post-ws__sticker-breathe">
-                    {file && /\.json$/i.test(file.name) ? (
+                    {file && sprite ? (
+                      // Спрайт-аркуш (Telegram-емодзі): кадр з віку.
+                      // Вік ділиться на швидкість ролика: прискорення
+                      // стискає голос і субтитри, а подарунок грає своїм
+                      // темпом — як анімації персонажа.
+                      <SpriteSticker
+                        src={`${rawUrl(projectId, file.name)}?v=${file.mtime}`}
+                        sprite={sprite}
+                        age={(frameTime - s.start) / (framePost.speed ?? 1)}
+                      />
+                    ) : file && /\.json$/i.test(file.name) ? (
                       // Файл сам несе свою анімацію — тоді предмет живий, а
                       // наші поява, дрейф і удар лишаються приправою зверху.
                       <LottieSticker
@@ -1630,23 +2978,30 @@ export function PostWorkspace({
                     )}
                     </span>
                   </div>
-                  {/* Бейджі — стовпчиком угору, найновіший найвище. Кожен
-                      наступний зсунуто вбік через один: рівний стовп
-                      читається як таблиця, а не як розліт. */}
-                  {badges.map(({ badge, age, rank }) => {
+                  {/* Бейджі: найновіший стоїть НАД предметом, попередні
+                      виштовхуються вбік — праворуч, потім ліворуч.
+
+                      Стовпчик угору тут неможливий, і це не смак, а
+                      арифметика: між безпечною лінією Instagram (250 px) і
+                      верхом предмета лишається 105 px, а сама плашка — 84.
+                      Друга вже не вміщується і або лізе під шапку, або
+                      лягає на персонажа. З боків місце є: предмет займає
+                      середину, а поля кадру порожні. */}
+                  {/* У слоті картки бейджі малює окремий шар ПІД карткою
+                      (див. `post-ws__nft-badges` вище) — звідси нічого. */}
+                  {(nftSlot ? [] : badges).map(({ badge, age, rank, rankSmooth }) => {
                     const b = badgePop(age);
-                    // Найновіший стоїть просто над предметом, попередні
-                    // піднімаються на ряд вище і тануть. Перехід між
-                    // рядами — плавний (CSS), тому поява нового виглядає
-                    // як виштовхування, а не як перестрибування.
-                    const row = rank;
+                    // Місця: 0 — над предметом, 1 — праворуч, 2 — ліворуч.
+                    // Позицію беремо з ПЛАВНОГО рангу, тож поява нового
+                    // бейджа не телепортує старі, а перевозить їх.
+                    const spot = badgeSpot(rankSmooth, s.left, s.width);
                     return (
                       <span
                         key={`${badge.at}-${badge.text}`}
                         className={`post-ws__badge${badge.tone ? ` is-${badge.tone}` : ''}`}
                         style={{
-                          bottom: `${96 + row * 21}%`,
-                          left: `${50 + (row % 2 === 0 ? 7 : -7)}%`,
+                          bottom: `${spot.bottom}%`,
+                          left: `${((spot.centre - s.left) / s.width) * 100}%`,
                           opacity: b.opacity * badgeRankFade(rank),
                           transform: `translate(-50%, ${b.lift * 100}%) rotate(${b.rot}deg) scale(${b.scale})`,
                         }}
@@ -1666,7 +3021,7 @@ export function PostWorkspace({
                 лишаються на стікері, а пігулка просто стоїть під ним. */}
             {(activeCard ? [] : liveStickers).map((s) => {
               if (!s.sticker.label) return null;
-              const age = time - s.start;
+              const age = frameTime - s.start;
               const side = s.sticker.enter === 'from-right' || s.sticker.enter === 'from-left';
               // Предмет, що виїжджає збоку, везе свою пігулку з собою:
               // вона тримає той самий зсув входу. Інакше підпис стоїть на
@@ -1696,7 +3051,7 @@ export function PostWorkspace({
                 Щойно доріжка рушила, виїжджає на місце. key сталий: інакше
                 зміна пози перестворювала б елемент, і виїзд програвався б
                 заново на кожному біті. */}
-            {activePoseCard && time >= 0.01 ? (
+            {activePoseCard && frameTime >= 0.01 ? (
               <HostLayer key="host" src={activePoseCard.src} />
             ) : null}
 
@@ -1711,14 +3066,14 @@ export function PostWorkspace({
               <div className="post-ws__caption">
                 <span className="post-ws__caption-line">
                   {activeChunk.map((w, i) => {
-                    const said = w.start <= time;
+                    const said = w.start <= frameTime;
                     const bare = cleanCaption(w.word);
                     const text = preset.captions.uppercase ? bare.toUpperCase() : bare;
                     return (
                       <span
                         key={`${w.start}-${i}`}
                         className={`post-ws__caption-word${said ? ' is-said' : ''}${w.accent ? ' is-accent' : ''}`}
-                        style={{ ['--glow' as string]: `${wordGlow(time, w)}` }}
+                        style={{ ['--glow' as string]: `${wordGlow(frameTime, w)}` }}
                       >
                         {/* Слово в слові: зовнішній несе появу і плашку,
                             внутрішній — вагу під голос. Обидва чіпають
@@ -1730,7 +3085,7 @@ export function PostWorkspace({
                   })}
                 </span>
               </div>
-            ) : post.words.length === 0 && post.script.trim() ? (
+            ) : !previewPost && post.words.length === 0 && post.script.trim() ? (
               // Заглушка ЛИШЕ доки немає таймкодів: показуємо перше слово
               // блідим, щоб було видно, як ляже субтитр — розмір, шрифт,
               // місце в кадрі. Інакше стиль перевіряєш аж після озвучки,
@@ -1749,13 +3104,38 @@ export function PostWorkspace({
               </div>
             ) : null}
             <div className="post-ws__safe" aria-hidden />
-            {!post.audio ? (
+            {/*
+              Підказка про порожній кадр — лише поки нема ЧОГО показати.
+              Щойно з'явився сценарій, у кадрі вже стоїть бліде превʼю
+              першого слова, і два тексти лягали один на одного.
+            */}
+            {!previewPost && !post.audio && !post.script.trim() ? (
               <div className="post-ws__frame-empty">
                 Порожньо. Почни зі звуку — від його довжини рахується решта.
               </div>
             ) : null}
           </div>
 
+          {/* Рядок прев'ю руху — поза умовою post.audio: демо працює і в
+              проєкті без доріжки, а кнопка виходу потрібна завжди. */}
+          {previewPost ? (
+            <div className="post-ws__preview-bar">
+              <span className="post-ws__preview-dot" aria-hidden />
+              <span className="post-ws__preview-name">
+                рух: {motionPreview?.title ?? motionPreview?.id}
+              </span>
+              <span className="post-ws__preview-time">
+                {demoTime.toFixed(1)} / {motionPreview?.demo?.duration.toFixed(1)} с
+              </span>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setMotionPreview(null)}
+              >
+                Закрити
+              </button>
+            </div>
+          ) : null}
           {post.audio ? (
             <>
               {/*
@@ -1770,7 +3150,10 @@ export function PostWorkspace({
                 onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
                 hidden
               />
-              <div className="post-ws__scrub">
+              {/* Під час прев'ю руху скраб схований: він показує час
+                  ДОРІЖКИ, а кадр живе в петлі демо — два лічильники з
+                  різними числами гірші за один. */}
+              <div className="post-ws__scrub" hidden={previewPost != null}>
                 <button
                   type="button"
                   className="post-ws__play"
@@ -1805,7 +3188,61 @@ export function PostWorkspace({
                 */}
                 <span className="post-ws__time">
                   {clock(time / speed)} / {clock(duration / speed)}
-                  {speed !== 1 ? <span className="post-ws__rate">{speed.toFixed(1)}×</span> : null}
+                  {/* Множник і є входом до прискорення: він тут завжди
+                      під рукою, і окрема кнопка на пів екрана під те саме
+                      налаштування була б зайвою. */}
+                  <span className="post-ws__rate-wrap">
+                    <button
+                      type="button"
+                      className={`post-ws__rate${speed !== 1 ? ' is-on' : ''}`}
+                      disabled={duration === 0}
+                      title="Прискорення — повзунком"
+                      onClick={() => setSpeedOpen((v) => !v)}
+                    >
+                      {speed.toFixed(1)}×
+                    </button>
+                    {speedOpen ? (
+                      <>
+                        {/* Прозора підкладка: клік повз віконце закриває
+                            його. Саме div, а не button — глобальні стилі
+                            застосунку красять будь-яку кнопку суцільним
+                            фоном, і підкладка на весь екран ховала весь
+                            інтерфейс. З клавіатури віконце закриває Escape. */}
+                        <div
+                          className="post-pop__scrim"
+                          aria-hidden
+                          onClick={() => setSpeedOpen(false)}
+                        />
+                        <div className="post-pop" role="dialog" aria-label="Прискорення">
+                          <div className="post-pop__head">
+                            <b>{speed.toFixed(1)}×</b>
+                            <span>{clock(duration)} → {clock(duration / speed)}</span>
+                          </div>
+                          <input
+                            className="post-pop__range"
+                            type="range"
+                            min={0}
+                            max={SPEEDS.length - 1}
+                            step={1}
+                            value={Math.max(0, SPEEDS.indexOf(speed as (typeof SPEEDS)[number]))}
+                            disabled={busy || duration === 0}
+                            onChange={(e) => {
+                              const v = SPEEDS[Number(e.target.value)] ?? 1;
+                              void save(
+                                { ...post, speed: v },
+                                v === 1
+                                  ? 'швидкість як записано'
+                                  : `${v.toFixed(1)}× · ${clock(duration / v)}`,
+                              );
+                            }}
+                          />
+                          <div className="post-pop__scale">
+                            <span>1.0×</span><span>2.0×</span>
+                          </div>
+                        </div>
+                      </>
+                    ) : null}
+                  </span>
                 </span>
               </div>
 
@@ -1816,7 +3253,20 @@ export function PostWorkspace({
                 наосліп — а стікери ставляться саме на конкретні слова.
               */}
               {post.words.length > 0 ? (
-                <div className="post-ws__words">
+                <div className={`post-ws__words${wordsOpen ? ' is-open' : ''}`}>
+                  {/* Згорнута до рядка. Розгорнута вона тягне сотню слів
+                      і розганяє скрол колонки так, що все під нею —
+                      кнопки в тому числі — їде за екран. Потрібна ж
+                      цілком лише коли ставиш стікери на конкретні слова. */}
+                  <button
+                    type="button"
+                    className="post-ws__words-toggle"
+                    aria-expanded={wordsOpen}
+                    title={wordsOpen ? 'Згорнути до рядка' : 'Показати весь текст'}
+                    onClick={() => setWordsOpen((v) => !v)}
+                  >
+                    {wordsOpen ? 'Згорнути' : `Увесь текст · ${post.words.length} слів`}
+                  </button>
                   {post.words.map((w, i) => {
                     // Той самий критерій, що й для субтитра в кадрі —
                     // інакше стрічка підсвічує одне, а кадр показує інше.
@@ -1862,7 +3312,329 @@ export function PostWorkspace({
           ) : null}
         </div>
 
-        <div className="post-ws__blocks">
+        {/*
+          Центр: де зараз ролик і вхід до ручних правок.
+
+          Порожнє поле під смугою лишене навмисно — туди піде живий стан
+          того, що робить агент. Доти краще порожньо, ніж заповнено
+          чимось, що доведеться викидати.
+        */}
+        <div className="post-ws__center">
+          {/* Квадрат із номером, назва підписом під ним. Пояснення до
+              кроку тут немає навмисно: у ряд із шести воно все одно
+              влазить обрізаним, а обрізане пояснення гірше за жодне. */}
+          <div className="post-ws__stages">
+            {stages.map((s, i) => (
+              <div key={s.key} className={`post-stage is-${s.state}`} title={s.hint}>
+                <span className="post-stage__box">{i + 1}</span>
+                <span className="post-stage__title">{s.title}</span>
+              </div>
+            ))}
+          </div>
+
+          {/*
+            Дії стоять ОДРАЗУ під смугою етапів, а не в кінці колонки.
+            Знизу тягнеться стрічка субтитрів на сотню слів, і панель у
+            потоці тонула в скролі — щоб натиснути «Рендерити», треба
+            було спершу прокрутити весь текст.
+
+            Рендер — рішення власника, а не крок, який агент проходить
+            сам: агент чекає натискання, і поки його немає, ролик не
+            збирається. Інакше mp4 виходив із половини зробленої роботи.
+          */}
+          <div className="post-ws__actions">
+            <button
+              type="button"
+              className="post-act is-primary"
+              disabled={busy || !post.audio || post.words.length === 0 || render?.state === 'running'}
+              title={!post.audio
+                ? 'Спершу звук — без доріжки нема чого рендерити'
+                : post.words.length === 0
+                  ? 'Спершу таймкоди (words.json) — без них студія не віддасть кадр знімальнику'
+                  : 'Рендер запускається прямо звідси — без чату; готовий файл з\'явиться нижче'}
+              onClick={() => void startRender()}
+            >
+              <span className="post-act__label">
+                {render?.state === 'running' ? 'Рендериться…' : 'Рендерити'}
+              </span>
+              <span className="post-act__hint">
+                {render?.state === 'running'
+                  ? renderProgress(render.tail)
+                  : !post.audio
+                    ? 'нема доріжки'
+                    : post.words.length === 0
+                      ? 'нема таймкодів'
+                      : (() => {
+                          const out = (post.audio.duration ?? 0) / (post.speed ?? 1);
+                          return `${Math.round(out * CANVAS.fps)} кадрів · ${clock(out)}`;
+                        })()}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className="post-act"
+              onClick={() => setManualOpen(true)}
+            >
+              <span className="post-act__label">Ручні правки</span>
+              <span className="post-act__hint">десять кроків</span>
+            </button>
+          </div>
+
+          {renderRow}
+
+          {/*
+            Конструктор анімацій — у місці, яке для нього й тримали.
+
+            Список читає assets/motions.json; клік по запису програє його
+            демо прямо в кадрі праворуч. Правки руху робляться в чаті
+            словами — кнопка «Правити» дає агенту контекст запису, щоб не
+            витрачати токени на пояснення, де ми і що робимо.
+          */}
+          {/*
+            Анімації — два входи до одного словника.
+
+            Панель-список тут, у центрі: розгорнув, клікнув рух — він
+            грає у великому кадрі праворуч, і правки з чату видно на
+            льоту. Галерея — окрема сторінка поверх студії: всі рухи
+            квадратними блоками-сценами, клік відкриває повне демо з
+            діями. Список — для роботи на ходу, галерея — для огляду.
+          */}
+          <div className="post-ws__motions">
+            <button
+              type="button"
+              className="post-motions__head"
+              aria-expanded={motionsOpen}
+              onClick={() => setMotionsOpen((v) => !v)}
+            >
+              <span className="post-motions__title">Анімації</span>
+              <span className="post-motions__hint">
+                {motions == null
+                  ? 'словник рухів'
+                  : `${motions.length} рухів · ${motions.filter((m) => m.demo).length} з прев'ю`}
+              </span>
+              <span className="post-block__chev" aria-hidden>⌄</span>
+            </button>
+
+            {motionsOpen ? (
+              motions == null ? (
+                <div className="post-motions__empty">
+                  <div className="post-ws__hint">
+                    У проєкті ще немає словника рухів (assets/motions.json).
+                  </div>
+                  <button type="button" className="btn" onClick={() => void seedMotions()}>
+                    Завести словник
+                  </button>
+                </div>
+              ) : (
+                <div className="post-motions__list">
+                  <div className="post-motions__bar">
+                    <button type="button" className="btn" onClick={() => setGalleryOpen(true)}>
+                      Галерея
+                    </button>
+                    <button type="button" className="btn" onClick={askMotionNew}>
+                      Нова анімація
+                    </button>
+                  </div>
+                  {motions.map((m) => {
+                    const active = motionPreview?.id === m.id;
+                    return (
+                      <div key={m.id} className={`post-motion${active ? ' is-on' : ''}`}>
+                        <button
+                          type="button"
+                          className="post-motion__row"
+                          title={m.demo ? 'Програти у кадрі праворуч' : "Без прев'ю — лише опис"}
+                          onClick={() => setMotionPreview(active ? null : m)}
+                        >
+                          <span className="post-motion__play" aria-hidden>
+                            {m.demo ? (active ? '■' : '▶') : '·'}
+                          </span>
+                          <span className="post-motion__name">{m.title}</span>
+                          <span className="post-motion__pick">{m.pick}</span>
+                        </button>
+                        {active ? (
+                          <div className="post-motion__detail">
+                            {m.enter ? <div><b>Вхід.</b> {m.enter}</div> : null}
+                            {m.inside ? <div><b>У кадрі.</b> {m.inside}</div> : null}
+                            {m.exit ? <div><b>Вихід.</b> {m.exit}</div> : null}
+                            {m.axes?.length ? <div><b>Осі:</b> {m.axes.join(' · ')}</div> : null}
+                            {m.fixed?.length ? <div><b>Не чіпати:</b> {m.fixed.join(' · ')}</div> : null}
+                            {m.avoid ? <div><b>Не брати, коли:</b> {m.avoid}</div> : null}
+                            {m.from?.length ? (
+                              <div><b>Живі приклади:</b> {m.from.join(' · ')}</div>
+                            ) : null}
+                            <button type="button" className="btn" onClick={() => askMotionEdit(m)}>
+                              Правити в чаті
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              )
+            ) : null}
+          </div>
+
+          {/*
+            Подарунки — другий каталог поруч зі словником рухів. Живе не
+            в проєкті, а в даних демона (165 анімацій спільні на всі
+            ролики), тому кнопка є завжди, а не «заводиться» в проєкт.
+          */}
+          <div className="post-ws__motions">
+            <button
+              type="button"
+              className="post-motions__head"
+              onClick={() => setGiftsOpen(true)}
+            >
+              <span className="post-motions__title">Подарунки</span>
+              <span className="post-motions__hint">
+                {gifts == null
+                  ? 'каталог Telegram · зірки і NFT'
+                  : `${gifts.filter((g) => g.kind === 'nft').length} NFT · ${gifts.filter((g) => g.kind === 'star').length} за зірки`}
+              </span>
+              <span className="post-block__chev" aria-hidden>⌄</span>
+            </button>
+          </div>
+
+          {/*
+            Сценарій — швидкий доступ до тексту озвучки прямо з головного
+            екрана: власник копіює його в ElevenLabs. Раніше текст жив
+            лише в блоці 2 усередині шторки «Ручні правки» — далеко.
+            Показуємо біти зі script.md, якщо він є (там таблиця з темпом
+            і паузами для начитки), інакше — текст із post.json.
+          */}
+          <div className="post-ws__motions">
+            <button
+              type="button"
+              className="post-motions__head"
+              aria-expanded={scriptOpen}
+              onClick={() => setScriptOpen((v) => !v)}
+            >
+              <span className="post-motions__title">Сценарій</span>
+              <span className="post-motions__hint">
+                {scriptRows.length
+                  ? `${scriptRows.length} біт · зі script.md`
+                  : post.script.trim()
+                    ? `${post.script.trim().split(/\s+/).length} слів`
+                    : 'ще порожньо'}
+              </span>
+              <span className="post-block__chev" aria-hidden>⌄</span>
+            </button>
+            {scriptOpen ? (
+              <div className="post-script">
+                <div className="post-script__bar">
+                  <button
+                    type="button"
+                    className="post-block__pick"
+                    disabled={!scriptPlain.trim()}
+                    title="Чистий текст без номерів і темпів — вставляй у ElevenLabs"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(scriptPlain.trim()).then(
+                        () => setNote('сценарій скопійовано — вставляй у ElevenLabs'),
+                        () => setNote('не вийшло скопіювати — виділи текст і Ctrl+C'),
+                      );
+                    }}
+                  >
+                    Скопіювати для озвучки
+                  </button>
+                  {scriptRows.length ? (
+                    <span className="post-ws__hint">
+                      {scriptMeta.hook ? `гак: ${scriptMeta.hook}` : ''}
+                      {scriptMeta.hook && scriptMeta.frame ? ' · ' : ''}
+                      {scriptMeta.frame ? `каркас: ${scriptMeta.frame}` : ''}
+                    </span>
+                  ) : null}
+                </div>
+                {scriptRows.length ? (
+                  <ol className="post-script__rows">
+                    {scriptRows.map((r) => (
+                      <li key={r.n} className="post-script__row">
+                        <span className="post-script__n">{r.n}</span>
+                        <span className="post-script__text">{r.text}</span>
+                        <span className="post-script__meta">
+                          {r.tempo != null ? `т${r.tempo}` : ''}
+                          {r.tone != null ? ` тон${r.tone}` : ''}
+                          {r.pause != null ? ` п${r.pause}` : ''}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <pre className="post-script__plain">{scriptPlain.trim() || 'Сценарію ще нема — попроси агента написати або встав у блок 2.'}</pre>
+                )}
+              </div>
+            ) : null}
+          </div>
+
+          {giftsOpen ? (
+            <GiftGallery
+              items={gifts ?? []}
+              projectId={projectId}
+              takeState={giftTake}
+              onTake={takeGift}
+              onNote={setNote}
+              onClose={() => setGiftsOpen(false)}
+            />
+          ) : null}
+
+          {galleryOpen ? (
+            motions == null ? (
+              <div className="post-gallery">
+                <div className="post-gallery__bar">
+                  <span className="post-gallery__title">Анімації</span>
+                  <span className="post-ws__spacer" />
+                  <button type="button" className="btn" onClick={() => setGalleryOpen(false)}>
+                    Закрити
+                  </button>
+                </div>
+                <div className="post-motions__empty">
+                  <div className="post-ws__hint">
+                    У проєкті ще немає словника рухів (assets/motions.json).
+                  </div>
+                  <button type="button" className="btn" onClick={() => void seedMotions()}>
+                    Завести словник
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <MotionGallery
+                entries={motions}
+                projectId={projectId}
+                poseCards={poseCards}
+                stickerByPath={stickerByPath}
+                onEdit={askMotionEdit}
+                onNew={askMotionNew}
+                onDelete={deleteMotion}
+                onClose={() => setGalleryOpen(false)}
+              />
+            )
+          ) : null}
+
+          <div className="post-ws__center-free" />
+        </div>
+
+        {/*
+          Панель іде ПОРТАЛОМ у body, а не лишається тут.
+
+          На місці вона сиділа всередині розкладки проєкту, і композер
+          чату лишався поверх неї попри більший z-index: число всередині
+          чужого стекінг-контексту нічого не важить. Той самий висновок
+          уже був на модалках стікерів — тому одразу портал, а не ще один
+          підбір z-index.
+        */}
+        {manualOpen ? createPortal((
+        <div className="post-ws__blocks is-open">
+          <div className="post-ws__blocks-bar">
+            <span className="post-ws__blocks-title">Ручні правки</span>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setManualOpen(false)}
+            >
+              Закрити
+            </button>
+          </div>
           <BlockShell
             num={1}
             title="Звук"
@@ -1881,6 +3653,17 @@ export function PostWorkspace({
                     onClick={() => void clearAudio()}
                   >
                     Прибрати
+                  </button>
+                ) : null}
+                {post.audio ? (
+                  <button
+                    type="button"
+                    className="post-block__icon"
+                    disabled={busy || align?.state === 'running' || render?.state === 'running'}
+                    title="Перевирівняти таймкоди — якщо текст сценарію мінявся після озвучки"
+                    onClick={() => post.audio && void startAlign(post.audio.path)}
+                  >
+                    Таймкоди
                   </button>
                 ) : null}
                 <button
@@ -1917,6 +3700,17 @@ export function PostWorkspace({
                   ? 'Клікни файл нижче, щоб зробити його доріжкою.'
                   : 'Залий mp3 або обери з проєкту.'}
             </div>
+            {align && align.state !== 'idle' ? (
+              <div className="post-block__note" title={align.error ?? undefined}>
+                {align.state === 'running'
+                  ? 'таймкоди: вирівнюю…'
+                  : align.state === 'error'
+                    ? `⚠ таймкоди не вийшли: ${align.error ?? 'див. .cache/align.log'}`
+                    : align.report?.warning
+                      ? `⚠ таймкоди: ${post.words.length} слів, але ${align.report.warning}`
+                      : `таймкоди: ${post.words.length || align.report?.words || 0} слів ✓`}
+              </div>
+            ) : null}
             <div className="post-block__row">
               {audioFiles.map((path) => (
                 <button
@@ -2334,17 +4128,31 @@ export function PostWorkspace({
                   <div className="post-block__poses">
                     {mine.map((r) => {
                       const f = r.file ? stickerByPath.get(r.file.replace(/\\/g, '/')) : null;
+                      // Файл проєкту → ассет бібліотеки → нічого. Без другої
+                      // ланки наскрізний набір показувався б порожніми
+                      // квадратами з підписами: реєстр є, а дивитись нема на що.
+                      const src = f
+                        ? `${rawUrl(projectId, f.name)}?v=${f.mtime}`
+                        : r.libraryId
+                          ? libraryRawUrl(r.libraryId)
+                          : '';
                       return (
                         <button
                           type="button"
                           key={r.id}
                           className="post-block__pose"
                           disabled={busy}
-                          title={`${r.id}\n${r.use ?? ''}\n\nКлік — перемалювати в нашому стилі`}
+                          title={[
+                            r.id,
+                            r.use ?? '',
+                            f ? 'у проєкті' : r.libraryId ? 'зі спільної бібліотеки' : '',
+                            '',
+                            'Клік — перемалювати в нашому стилі',
+                          ].filter(Boolean).join('\n')}
                           onClick={() => setStickerPreview(r)}
                         >
-                          {f ? (
-                            <img src={`${rawUrl(projectId, f.name)}?v=${f.mtime}`} alt="" loading="lazy" />
+                          {src ? (
+                            <img src={src} alt="" loading="lazy" />
                           ) : (
                             <span className="post-block__sticker-gap">{r.id}</span>
                           )}
@@ -2560,7 +4368,13 @@ export function PostWorkspace({
                   + 'звідти, коли перегляне всі брифи разом\n'
                   + 'Пройди ВЕСЬ сценарій і залиш усі заявки одним заходом, а не '
                   + 'по одній у процесі.\n\n'
-                  + 'ЯК ВОНО РУХАЄТЬСЯ — вирішуєш теж ти, і це половина роботи. '
+                  + 'ЯК ВОНО РУХАЄТЬСЯ — не вигадуй, а ВИБЕРИ зі словника '
+                  + 'assets/motions.json: пройди таблицю добору (motion-library.md), '
+                  + 'перше «так» згори — твій запис. Вибір ЗАПИШИ у сцену: '
+                  + 'scenes[].plan.motion = "<id запису>" ("hook-solo-lead", '
+                  + '"empty-face", …) — по ньому Перевірка звіряє бюджет ролика '
+                  + '(один гак, одне кільце, квоти карток і пауз). Сцена без '
+                  + 'motion = вибір, якого не можна перевірити.\n\n'
                   + 'Правила у references/motion.md плагіна. Коротко: перший стікер '
                   + 'речення заходить "instant" (поки він виростає, глядач дивиться '
                   + 'на порожнечу); другий предмет — "from-right" чи "from-left", бо '
@@ -2715,43 +4529,26 @@ export function PostWorkspace({
             <div className="post-block__note">
               {!post.audio
                 ? 'Спершу звук — без доріжки нема чого рендерити.'
-                : warns
-                  ? `${warns} зауваження в перевірці — рендер запише їх у файл як є.`
-                  : 'Рендер знімає САМ цей кадр покадрово, тому mp4 виходить таким, як тут.'}
+                : post.words.length === 0
+                  ? 'Спершу таймкоди (words.json) — без них студія не віддасть кадр знімальнику.'
+                  : warns
+                    ? `${warns} зауваження в перевірці — рендер запише їх у файл як є.`
+                    : 'Рендер знімає САМ цей кадр покадрово, тому mp4 виходить таким, як тут.'}
             </div>
             <div className="post-block__row">
               <button
                 type="button"
                 className="post-block__pick"
-                disabled={busy || !post.audio}
-                title="Віддати рендер у чат — з адресою студії, id проєкту і доріжкою"
-                onClick={() => ask([
-                  'Відрендер ролик у mp4.',
-                  '',
-                  `python scripts/render.py --url ${typeof window !== 'undefined' ? window.location.origin : ''} `
-                    + `--project ${projectId} --out . --audio ${post.audio?.path ?? ''} `
-                    + `--fps ${CANVAS.fps} --speed ${post.speed ?? 1}`,
-                  '',
-                  'ЯК ЦЕ ПРАЦЮЄ. Скрипт відкриває цю саму студію в режимі ?shot=1',
-                  '(у вікні лишається тільки кадр), перемотує window.__postStudio.setTime',
-                  'по кадрах і знімає кожен. Окремої композиції НЕ збирай: увесь рух —',
-                  'чиста функція часу, тож знятий кадр і є те, що видно в превʼю.',
-                  'Композиція, зібрана заново, розійдеться з превʼю на першій правці.',
-                  '',
-                  'Перед запуском переконайся, що dev-студія піднята (pnpm tools-dev status)',
-                  'і порт у --url збігається з web.',
-                  '',
-                  'ПРИСКОРЕННЯ. --speed стискає ЧАС: кадр на секунді t готового файлу',
-                  'бере секунду t*speed у доріжці, а звук іде через atempo. Анімації',
-                  'персонажа при цьому НЕ прискорюються — вони живуть у власному часі,',
-                  'як і в превʼю.',
-                  '',
-                  'ЗВІТ — трьома рядками: скільки кадрів, скільки вийшов файл, що перевірити оком.',
-                ].join('\n'))}
+                disabled={busy || !post.audio || post.words.length === 0 || render?.state === 'running'}
+                title="Рендер запускається прямо звідси — без чату"
+                onClick={() => void startRender()}
               >
-                Відрендерити
+                {render?.state === 'running'
+                  ? `Рендериться… ${renderProgress(render.tail)}`
+                  : 'Відрендерити'}
               </button>
             </div>
+            {renderRow}
             <div className="post-block__kind-hint">
               {(() => {
                 const speed = post.speed ?? 1;
@@ -2826,6 +4623,7 @@ export function PostWorkspace({
             ) : null}
           </BlockShell>
         </div>
+        ), document.body) : null}
       </div>
 
       {/*
@@ -3053,3 +4851,1062 @@ export function PostWorkspace({
     </div>
   );
 }
+
+/** Нарізка слів на групи субтитрів — спільна для ролика і демо руху. */
+function chunkCaptionWords(words: readonly WordTiming[]): WordTiming[][] {
+    // Рішення приймає ширина, а не кількість. «Це і є» — три слова, але
+    // п'ять символів: закривати на них групу означало б лишити пів
+    // рядка порожнім, а наступне слово («навчання») відкинути в новий
+    // кадр. Тому стеля за словами висока, а справжня межа — довжина.
+    const MAX_WORDS = 4;
+    // Міряно, не вгадано: при кеглі 6.9 % ширини кадру рядок із 20
+    // символів займає 1252 px проти 756 доступних. Тринадцять — стеля,
+    // за якої найдовша реальна група ще вміщається без стискання.
+    //
+    // Стискати рядок під ширину не можна: сусідні кадри отримали б різний
+    // кегль, і субтитр «дихав» би розміром від групи до групи. У
+    // референсі кегль сталий, а короткі група — саме тому.
+    const MAX_CHARS = 13;
+    const chunks: WordTiming[][] = [];
+    let cur: WordTiming[] = [];
+    let len = 0;
+    for (const w of words) {
+      // Довжину рахуємо за очищеним словом, бо саме воно піде в кадр.
+      // Слова з самої пунктуації в групу не беремо взагалі: вони з’їдали
+      // б місце й ламали лічильник, нічого не показуючи.
+      const wl = cleanCaption(w.word).length;
+      if (wl === 0) continue;
+      // +1 на пробіл між словами — інакше рядок із п'яти коротких слів
+      // рахується вужчим, ніж малюється.
+      const cost = cur.length > 0 ? wl + 1 : wl;
+      if (cur.length >= MAX_WORDS || (cur.length > 0 && len + cost > MAX_CHARS)) {
+        chunks.push(cur);
+        cur = [];
+        len = 0;
+      }
+      cur.push(w);
+      len += cur.length > 1 ? cost : wl;
+      // Кінець речення закриває групу. Без цього рядок склеює хвіст
+      // однієї фрази з початком наступної («не соромно | це і є») і
+      // ріже думку там, де її треба тримати цілою.
+      if (/[.!?…]$/.test(w.word.trim())) {
+        chunks.push(cur);
+        cur = [];
+        len = 0;
+      }
+    }
+    if (cur.length > 0) chunks.push(cur);
+    return chunks;
+}
+
+/* ------------------------------------------------------------------ */
+/* Галерея рухів                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Мінікадр демо руху.
+ *
+ * Це свідома друга копія кадру студії: та сама розкладка тими самими
+ * чистими функціями (stickerSpans/stickerLayout/liveBadges/...) і ті
+ * самі CSS-класи — тому мініатюра масштабується контейнером і виглядає
+ * як справжній кадр. Спрощення рівно три: немає скраба, немає порожніх
+ * станів, немає режиму зйомки. Якщо кадр студії і мінікадр розійшлись —
+ * правити ТУТ, звіряючись зі стейджем вище.
+ */
+function MotionMiniFrame({ demo, time, projectId, poseCards, stickerByPath, full = false }: {
+  demo: NonNullable<MotionEntry['demo']>;
+  time: number;
+  projectId: string;
+  poseCards: PoseCard[];
+  stickerByPath: Map<string, PostFile>;
+  /**
+   * Повний кадр 9:16 із ведучим і субтитрами — для модалу. У сітці
+   * галереї кадр без них: блок квадратний і показує саму сцену, бо
+   * ведучий і текст однакові в усіх рухах і лише розмивають різницю.
+   */
+  full?: boolean;
+}) {
+  const post = useMemo(() => demoPost(demo), [demo]);
+  const preset = PRESETS[DEFAULT_PRESET];
+  const stickers = post.stickers ?? [];
+  const cards = post.cards ?? [];
+  const spans = stickerSpans(stickers, post.words, post.scenes ?? [], cards);
+  const live = stickerLayout(spans, time, preset.stickers.maxWidthPct);
+  const punch = accentPunch(time, post.words);
+  const stickerBase = preset.stickers.top
+    + preset.stickers.maxWidthPct * (CANVAS.w / CANVAS.h);
+  const card = cardAt(cards, post.words, time);
+  const chunks = useMemo(() => chunkCaptionWords(post.words), [post.words]);
+  const chunk = (() => {
+    let found: WordTiming[] | null = null;
+    for (const c of chunks) {
+      if (c[0]!.start <= time) found = c;
+      else break;
+    }
+    return found;
+  })();
+  const beat = beatAt(post.beats, time);
+  const pose = beat?.pose ?? null;
+  const poseCard = pose
+    ? poseCards.find((c) =>
+      c.entry?.id === pose || c.entry?.file === pose || c.key === pose
+      || (c.ref.split('/').pop() ?? c.ref) === pose) ?? null
+    : null;
+
+  /*
+   * Шов петлі. Демо крутиться по колу, і на рестарті вміст зникав одним
+   * кадром — «пропав за 0.1 с, і наступний з'явився негарно». Тепер
+   * останні та перші 0.3 с циклу кадр накриває пелена кольору тла:
+   * вміст плавно розчиняється, кадр мить стоїть чистим і так само
+   * плавно проявляється наново. Фон і сітка при цьому не блимають.
+   */
+  const SEAM_S = 0.3;
+  const seamCover = 1 - Math.max(0, Math.min(time / SEAM_S, (demo.duration - time) / SEAM_S, 1));
+
+  return (
+    <div
+      className="post-ws__frame post-mini__frame"
+      style={{
+        containerType: 'inline-size',
+        background: preset.backdrop.background,
+        ['--grid-color' as string]: preset.backdrop.gridColor,
+        ['--grid-step' as string]: `${(preset.backdrop.gridStep / CANVAS.w) * 100}cqw`,
+        ['--grid-width' as string]: `${preset.backdrop.gridWidth}px`,
+      }}
+    >
+      <div
+        className="post-ws__floor-wrap"
+        style={{
+          height: `${FLOOR_H * 100}%`,
+          ['--floor-line' as string]: preset.backdrop.gridColor,
+        }}
+      >
+        <FloorGrid />
+      </div>
+
+      {card ? (
+        <CardLayer
+          key={`${card.card.id}-${card.start.toFixed(3)}`}
+          src={rawUrl(projectId, card.card.file)}
+          hold={card.card.hold}
+          start={card.start}
+          time={time}
+          top={preset.stickers.top}
+          words={post.words}
+          sticker={card.card.sticker ?? null}
+          stickerUrl={card.card.sticker
+            ? rawUrl(projectId, card.card.sticker.file)
+            : null}
+        />
+      ) : null}
+
+      {!card && live.length > 1 ? (
+        <StickerLinksLayer
+          spans={live}
+          time={time}
+          zoneTop={preset.stickers.top}
+          zoneBottom={stickerBase}
+        />
+      ) : null}
+
+      {(card ? [] : live).map((s) => {
+        const file = s.sticker.file
+          ? stickerByPath.get(s.sticker.file.replace(/\\/g, '/')) ?? null
+          : null;
+        // Демо словника завжди несуть file+sprite самі — реєстрового
+        // фолбека (як у головному кадрі) тут нема свідомо.
+        const sprite = s.sticker.sprite;
+        const drift = stickerDrift(stickers.indexOf(s.sticker));
+        const entry = stickerEnter(s.sticker.enter, time - s.start);
+        const badges = liveBadges(s.sticker.badges, post.words, time);
+        const outP = Math.min(
+          Math.max((time - (s.end - STICKER_EXIT_LEAD_S)) / STICKER_EXIT_LEAD_S, 0),
+          1,
+        );
+        // Той самий вихід, що в головному кадрі: мінікадр — це той самий
+        // рендер, і різні числа тут означали б брехливе демо.
+        const fx = stickerExit(s.sticker.exit, outP);
+        const room = (s.sticker.badges?.length ?? 0) > 0 ? BADGE_ROOM : 0;
+        const box = Math.min(
+          s.width * CANVAS.w / CANVAS.h,
+          stickerBase - preset.stickers.top - room,
+        );
+        return (
+          <div
+            key={`${s.sticker.id}-${s.start.toFixed(3)}`}
+            className={`post-ws__sticker${
+              time > s.end - STICKER_EXIT_LEAD_S ? ' is-out' : ''
+            }${s.sticker.still ? ' is-still' : ''}`}
+            style={{
+              top: `${(stickerBase - box) * 100}%`,
+              height: `${box * 100}%`,
+              left: `${s.left * 100}%`,
+              width: `${s.width * 100}%`,
+              ['--enter-x' as string]: `${(entry.x + fx.x) * 100}%`,
+              ['--enter-y' as string]: `${(entry.y + fx.y) * 100}%`,
+              ['--enter-scale' as string]: `${entry.scale * fx.scaleMul}`,
+              opacity: entry.opacity * fx.opacity,
+              ['--fx-rot' as string]: `${(entry.rot ?? 0) + fx.rot}deg`,
+              ['--fx-ry' as string]: `${(entry.ry ?? 0) + fx.ry}deg`,
+              ['--fx-sx' as string]: `${(entry.sx ?? 1) * fx.sx}`,
+              ['--fx-sy' as string]: `${(entry.sy ?? 1) * fx.sy}`,
+              ['--fx-blur' as string]: `${Math.max(entry.blur ?? 0, fx.blur)}px`,
+              ['--sticker-tilt' as string]: drift.tilt,
+              ['--drift-dur' as string]: drift.dur,
+              ['--drift-delay' as string]: drift.delay,
+              ['--drift-dir' as string]: drift.dir,
+              ['--punch' as string]: `${punch}`,
+              ['--out' as string]: `${outP}`,
+            }}
+          >
+            {s.sticker.ornament ? (
+              <StickerOrnamentLayer
+                ornament={s.sticker.ornament}
+                age={time - s.start}
+                time={time}
+                seed={stickers.indexOf(s.sticker)}
+              />
+            ) : null}
+            <div className="post-ws__sticker-in">
+              <span className="post-ws__sticker-breathe">
+                {file && sprite ? (
+                  <SpriteSticker
+                    src={`${rawUrl(projectId, file.name)}?v=${file.mtime}`}
+                    sprite={sprite}
+                    age={(time - s.start) / (post.speed ?? 1)}
+                  />
+                ) : file ? (
+                  <img src={`${rawUrl(projectId, file.name)}?v=${file.mtime}`} alt="" />
+                ) : (
+                  <span className="post-ws__sticker-gap">{s.sticker.id}</span>
+                )}
+              </span>
+            </div>
+            {badges.map(({ badge, age, rank, rankSmooth }) => {
+              const b = badgePop(age);
+              const spot = badgeSpot(rankSmooth, s.left, s.width);
+              return (
+                <span
+                  key={`${badge.at}-${badge.text}`}
+                  className={`post-ws__badge${badge.tone ? ` is-${badge.tone}` : ''}`}
+                  style={{
+                    bottom: `${spot.bottom}%`,
+                    left: `${((spot.centre - s.left) / s.width) * 100}%`,
+                    opacity: b.opacity * badgeRankFade(rank),
+                    transform: `translate(-50%, ${b.lift * 100}%) rotate(${b.rot}deg) scale(${b.scale})`,
+                  }}
+                >
+                  {badge.text}
+                </span>
+              );
+            })}
+          </div>
+        );
+      })}
+
+      {(card ? [] : live).map((s) => {
+        if (!s.sticker.label) return null;
+        const age = time - s.start;
+        const side = s.sticker.enter === 'from-right' || s.sticker.enter === 'from-left';
+        const l = side ? { opacity: 1, scale: 1, lift: 0 } : labelPop(age);
+        const ride = side ? stickerEnter(s.sticker.enter, age).x : 0;
+        return (
+          <div
+            key={`label-${s.sticker.id}-${s.start.toFixed(3)}`}
+            className={`post-ws__sticker-label${
+              s.sticker.labelTone === 'warn' ? ' is-warn' : ''
+            }`}
+            style={{
+              left: `${(s.left + s.width / 2) * 100}%`,
+              top: `${stickerBase * 100}%`,
+              opacity: l.opacity,
+              transform: `translate(-50%, ${l.lift * 100}%) translateX(${ride * 100}%) scale(${l.scale})`,
+            }}
+          >
+            {s.sticker.label}
+          </div>
+        );
+      })}
+
+      {full && poseCard && time >= 0.01 ? <HostLayer key="host" src={poseCard.src} /> : null}
+      <div className="post-ws__floor-glow" aria-hidden />
+
+      {full && chunk ? (
+        <div className="post-ws__caption">
+          <span className="post-ws__caption-line">
+            {chunk.map((w, i) => {
+              const said = w.start <= time;
+              const bare = cleanCaption(w.word);
+              const text = preset.captions.uppercase ? bare.toUpperCase() : bare;
+              return (
+                <span
+                  key={`${w.start}-${i}`}
+                  className={`post-ws__caption-word${said ? ' is-said' : ''}${w.accent ? ' is-accent' : ''}`}
+                  style={{ ['--glow' as string]: `${wordGlow(time, w)}` }}
+                >
+                  <span className="post-ws__caption-ink">{text}</span>
+                </span>
+              );
+            })}
+          </span>
+        </div>
+      ) : null}
+
+      {seamCover > 0 ? (
+        <div
+          className="post-mini__seam"
+          aria-hidden
+          style={{ opacity: seamCover, background: preset.backdrop.background }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Каталог подарунків Telegram — сторінка поверх студії.
+ *
+ * Два види в окремих вкладках, бо це різні сутності для сценарію:
+ * подарунок за зірки — витрата, колекційний — актив. Прев'ю статичні
+ * (сітка з 165 анімацій задушила б браузер); анімація приїжджає в
+ * ролик разом зі спрайтом, коли натиснути «Взяти».
+ */
+function GiftGallery({ items, projectId, takeState, onTake, onNote, onClose }: {
+  items: GiftItem[];
+  projectId: string;
+  takeState: { slug: string; state: 'running' | 'done' | 'error'; error?: string } | null;
+  onTake: (g: GiftItem, variant?: string) => Promise<void> | void;
+  onNote: (text: string) => void;
+  onClose: () => void;
+}) {
+  const [kind, setKind] = useState<'nft' | 'star' | 'backdrops'>('nft');
+  const [q, setQ] = useState('');
+  // Відкритий подарунок — підменю з його NFT-моделями (свій emoji-набір
+  // на кожен подарунок; власник заповнює їх поступово).
+  const [openGift, setOpenGift] = useState<GiftItem | null>(null);
+  // Шукаємо і за призначенням теж: «Хеллоуїн», «гроші», «зима» —
+  // так каталог відповідає на питання «що взяти під цю фразу».
+  const needle = q.trim().toLowerCase();
+  const shown = items.filter((g) => g.kind === kind
+    && (needle === ''
+      || (g.title ?? '').toLowerCase().includes(needle)
+      || (g.use ?? '').toLowerCase().includes(needle)));
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      // Спершу закривається підменю моделей, потім сама галерея.
+      setOpenGift((prev) => {
+        if (prev != null) return null;
+        onClose();
+        return prev;
+      });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="post-gallery">
+      <div className="post-gallery__bar">
+        <span className="post-gallery__title">Подарунки</span>
+        <div className="post-gallery__groups">
+          <button
+            type="button"
+            className={`post-gallery__group${kind === 'nft' ? ' is-on' : ''}`}
+            onClick={() => setKind('nft')}
+          >
+            Колекційні (NFT) <span>{items.filter((g) => g.kind === 'nft').length}</span>
+          </button>
+          <button
+            type="button"
+            className={`post-gallery__group${kind === 'star' ? ' is-on' : ''}`}
+            onClick={() => setKind('star')}
+          >
+            За зірки <span>{items.filter((g) => g.kind === 'star').length}</span>
+          </button>
+          <button
+            type="button"
+            className={`post-gallery__group${kind === 'backdrops' ? ' is-on' : ''}`}
+            onClick={() => setKind('backdrops')}
+          >
+            Фони NFT
+          </button>
+        </div>
+        <input
+          className="post-gifts__search"
+          placeholder="пошук за назвою…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <span className="post-ws__spacer" />
+        <button type="button" className="btn" onClick={onClose}>Закрити</button>
+      </div>
+
+      <div className="post-ws__hint post-gifts__note">
+        {kind === 'nft'
+          ? 'Колекційні: подарунок після апгрейду — унікальний, назад у зірки не повертається. Довідник для сценаріїв — references/gifts-nft.md.'
+          : kind === 'star'
+            ? 'Подарунки з магазину за зірки: тираж обмежений, можна конвертувати назад у зірки.'
+            : 'Фони і символи справжніх колекційних подарунків (кольори зняті зі сторінок t.me/nft). Картка кладеться в ролик блоком, подарунок ставиться в неї окремим стікером — і лишається анімованим.'}
+      </div>
+
+      {kind === 'backdrops' ? (
+        <NftBackdrops projectId={projectId} onNote={onNote} />
+      ) : null}
+
+      <div className="post-gifts__grid" hidden={kind === 'backdrops'}>
+        {shown.map((g) => {
+          const busy = takeState?.slug === g.slug && takeState.state === 'running';
+          const done = takeState?.slug === g.slug && takeState.state === 'done';
+          const failed = takeState?.slug === g.slug && takeState.state === 'error';
+          return (
+            <div key={g.slug} className="post-gifts__cell" title={g.use ?? ''}>
+              {/* Клік по картинці — підменю з NFT-моделями подарунка. */}
+              <button
+                type="button"
+                className="post-gifts__open"
+                title="Відкрити моделі цього подарунка"
+                onClick={() => setOpenGift(g)}
+              >
+                <img src={`/api/gifts/preview/${g.slug}`} alt="" loading="lazy" />
+              </button>
+              <div className="post-gifts__name">
+                {g.title || `${g.emoji ?? ''} ${g.slug}`}
+              </div>
+              {/* Призначення — те, за чим агент обирає предмет під фразу;
+                  у сітці воно важливіше за саму назву. */}
+              <div className="post-gifts__use">{g.use ?? ''}</div>
+              <button
+                type="button"
+                className="post-block__pick"
+                disabled={busy}
+                title={failed ? takeState?.error : 'Покласти в набір ролика анімованим спрайтом'}
+                onClick={() => void onTake(g)}
+              >
+                {busy ? 'Беру…' : done ? 'У наборі ✓' : failed ? 'Не вийшло' : 'Взяти в ролик'}
+              </button>
+            </div>
+          );
+        })}
+        {shown.length === 0 ? (
+          <div className="post-ws__hint">Нічого не знайшлось.</div>
+        ) : null}
+      </div>
+
+      {openGift ? (
+        <GiftVariants
+          gift={openGift}
+          takeState={takeState}
+          onTake={(variant) => void onTake(openGift, variant)}
+          onClose={() => setOpenGift(null)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Фони NFT — третя вкладка каталогу.
+ *
+ * Квадратна картка колекційного подарунка складається з трьох речей:
+ * радіальний градієнт (фон), зафарбований символ-патерн і стрічка з
+ * номером. Кольори зняті з публічних сторінок t.me/nft, тож картка в
+ * ролику виглядає як справжня, а не «схожа».
+ *
+ * Сам подарунок у картку НЕ запікається: він лишається окремим
+ * анімованим стікером поверх блока — інакше довелось би вибирати між
+ * правильним фоном і живою анімацією.
+ */
+/** Затемнити hex-колір: overlay ціни/значка у клієнті = edge × 0.9. */
+function dimHex(hex: string, k: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  if (Number.isNaN(n)) return hex;
+  const ch = (v: number): string => Math.round(v * k).toString(16).padStart(2, '0');
+  return `#${ch((n >> 16) & 255)}${ch((n >> 8) & 255)}${ch(n & 255)}`;
+}
+
+/** Освітлити hex-колір: змішати з білим на частку k. */
+function lightHex(hex: string, k: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  if (Number.isNaN(n)) return hex;
+  const ch = (v: number): string => Math.round(v + (255 - v) * k).toString(16).padStart(2, '0');
+  return `#${ch((n >> 16) & 255)}${ch((n >> 8) & 255)}${ch(n & 255)}`;
+}
+
+function NftBackdrops({ projectId, onNote }: { projectId: string; onNote: (t: string) => void }) {
+  interface Backdrop {
+    name: string; center: string; edge: string;
+    symbolColor?: string; textColor?: string; rarity?: number | null;
+  }
+  interface Symbol0 { name: string; file: string; rarity?: number | null }
+  const [backdrops, setBackdrops] = useState<Backdrop[]>([]);
+  const [symbols, setSymbols] = useState<Symbol0[]>([]);
+  const [pick, setPick] = useState<{ backdrop?: string; symbol?: string }>({});
+  const [number, setNumber] = useState('318139');
+  const [price, setPrice] = useState('623');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let off = false;
+    void (async () => {
+      try {
+        const [b, s] = await Promise.all([
+          fetch('/api/gifts/nft/backdrops', { cache: 'no-store' }).then((r) => r.json() as Promise<{ items?: Backdrop[] }>),
+          fetch('/api/gifts/nft/symbols', { cache: 'no-store' }).then((r) => r.json() as Promise<{ items?: Symbol0[] }>),
+        ]);
+        if (off) return;
+        setBackdrops(b.items ?? []);
+        setSymbols(s.items ?? []);
+      } catch {
+        // каталогу ще нема — порожній стан пояснить, що робити
+      }
+    })();
+    return () => { off = true; };
+  }, []);
+
+  const make = async (): Promise<void> => {
+    if (!pick.backdrop) return;
+    setBusy(true);
+    try {
+      const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/nft-card`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          backdrop: pick.backdrop, symbol: pick.symbol ?? '',
+          number, price,
+        }),
+      });
+      const data = await resp.json().catch(() => null) as { error?: string; file?: string } | null;
+      if (!resp.ok) throw new Error(data?.error ?? `HTTP ${resp.status}`);
+      onNote(`картка ${data?.file} готова — постав її блоком і поклади подарунок зверху`);
+    } catch (err) {
+      onNote(`картка не вийшла: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const chosen = backdrops.find((b) => b.name === pick.backdrop);
+  const chosenSym = symbols.find((s) => s.name === pick.symbol);
+
+  return (
+    <div className="post-nft">
+      <div className="post-nft__side">
+        <div className="post-block__kind-hint">Фони · {backdrops.length}</div>
+        <div className="post-nft__list">
+          {backdrops.map((b) => (
+            <button
+              key={b.name}
+              type="button"
+              className={`post-nft__chip${pick.backdrop === b.name ? ' is-on' : ''}`}
+              style={{ background: `radial-gradient(circle at 50% 42%, ${b.center}, ${b.edge})` }}
+              title={`${b.name}${b.rarity ? ` · ${b.rarity}%` : ''}`}
+              onClick={() => setPick((p) => ({ ...p, backdrop: b.name }))}
+            >
+              <span>{b.name}</span>
+            </button>
+          ))}
+          {backdrops.length === 0 ? (
+            <div className="post-ws__hint">
+              Каталог порожній. Збери його скриптом плагіна
+              <code> nft_backdrops.py</code> — він знімає фони й символи
+              зі сторінок t.me/nft.
+            </div>
+          ) : null}
+        </div>
+
+        <div className="post-block__kind-hint">Символи · {symbols.length}</div>
+        <div className="post-nft__syms">
+          <button
+            type="button"
+            className={`post-nft__sym${!pick.symbol ? ' is-on' : ''}`}
+            title="без символів"
+            onClick={() => setPick((p) => ({ ...p, symbol: undefined }))}
+          >—</button>
+          {symbols.map((s) => (
+            <button
+              key={s.name}
+              type="button"
+              className={`post-nft__sym${pick.symbol === s.name ? ' is-on' : ''}`}
+              title={`${s.name}${s.rarity ? ` · ${s.rarity}%` : ''}`}
+              onClick={() => setPick((p) => ({ ...p, symbol: s.name }))}
+            >
+              <img src={`/api/gifts/nft/symbols/${s.file.split('/').pop()}`} alt="" loading="lazy" />
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="post-nft__preview">
+        {/* Прев'ю тим самим рецептом, що й блок: градієнт + маска
+            символу + стрічка. Побачив тут — те саме буде в кадрі. */}
+        {/* Прев'ю — той самий рецепт, що й блок ролика: градієнт і
+            розкладка символів із веб-SVG t.me/nft; бейдж-стрічка,
+            зірка Stars і діамант — із клієнта Telegram Web (path 1:1).
+            Клітинка 264 px ≈ ×2.06 від клітинки клієнта 128. */}
+        {/* Прев'ю — точно за мобільним клієнтом Telegram (GiftSheet.GiftCell
+            + StarGiftPatterns TYPE_GIFT + RibbonDrawable), 1 dp = 2 px.
+            Ті самі константи (post-spec.ts) кладе в блок демон. */}
+        {(() => {
+          const DP = 2;
+          const RIB = 1.22; // ×довжина стрічки понад клієнтські 48 dp
+          const W = 128 * DP, H = 160 * DP;
+          const cx = W / 2, cy = Math.min(50 * DP, H / 2); // центр градієнта (CardBackground)
+          const gradR = ((Math.min(W, H) + (Math.max(W, H) - Math.min(W, H)) * 0.35) / 2);
+          const symUrl = chosenSym ? `/api/gifts/nft/symbols/${chosenSym.file.split('/').pop()}` : null;
+          const ribC = chosen ? tgAdaptHsv(chosen.center, TG_RIBBON_HSV_SAT, TG_RIBBON_HSV_VAL) : '#888';
+          const ribE = chosen ? tgAdaptHsv(chosen.edge, TG_RIBBON_HSV_SAT, TG_RIBBON_HSV_VAL) : '#666';
+          return (
+            <div className="post-nft__wrap" style={{ width: W, height: H }}>
+              <div
+                className="post-nft__card"
+                style={{
+                  borderRadius: TG_CARD_RADIUS_DP * DP,
+                  background: chosen
+                    ? `radial-gradient(${gradR}px circle at ${cx}px ${cy}px, ${chosen.center} 0%, ${chosen.edge} 100%)`
+                    : 'var(--bg-panel)',
+                }}
+              >
+                {symUrl ? TG_PATTERN_GIFT.map((p, i) => (
+                  <div
+                    key={i}
+                    className="post-nft__glyph"
+                    style={{
+                      left: cx + p.x * DP - (p.size * DP) / 2,
+                      top: cy + p.y * DP - (p.size * DP) / 2 + 12 * DP,
+                      width: p.size * DP,
+                      height: p.size * DP,
+                      opacity: p.alpha,
+                      backgroundColor: chosen?.symbolColor ?? '#000',
+                      WebkitMaskImage: `url(${symUrl})`,
+                      maskImage: `url(${symUrl})`,
+                    }}
+                  />
+                )) : null}
+                <div className="post-nft__slot" style={{ left: (W - 80 * DP) / 2, top: 12 * DP, width: 80 * DP, height: 80 * DP }}>
+                  подарунок<br />ставиться<br />стікером
+                </div>
+                {/* Ціна (GiftCell, unique): StarsBackground 0x40FFFFFF —
+                    білий 25 % поверх фону, кути 13 dp, 12 dp bold, білий
+                    текст, від низу 11 dp, padding 10 dp. */}
+                <div className="post-nft__price" style={{ height: 26 * DP, padding: `0 ${10 * DP}px`, fontSize: 12 * DP, bottom: 11 * DP, borderRadius: 13 * DP, background: 'rgba(255,255,255,.25)' }}>
+                  <svg viewBox="0 0 24 24" style={{ width: 12 * DP, height: 12 * DP }}><path d={TG_ICON_STAR_D} /></svg>{price || '—'}
+                </div>
+              </div>
+              {/* Стрічка: контур 48×48 dp у правому верхньому куті
+                  (marginTop 2, marginRight 1), градієнт center→edge через
+                  adaptHSV, текст 10 dp bold під 45°. */}
+              {/* Форма стрічки — їхній path без змін; лише масштаб ×RIB, щоб
+                  довжина була більша і підвороти вийшли за край картки.
+                  Зсув компенсує приріст, тож середина стрічки лишається
+                  на діагоналі кута. */}
+              <svg
+                className="post-nft__ribbon-svg"
+                width={TG_RIBBON_SIZE_DP * DP * RIB}
+                height={TG_RIBBON_SIZE_DP * DP * RIB}
+                viewBox={`0 0 ${TG_RIBBON_SIZE_DP} ${TG_RIBBON_SIZE_DP}`}
+                style={{
+                  position: 'absolute',
+                  top: (2 - TG_RIBBON_SIZE_DP * (RIB - 1) / 2) * DP,
+                  right: (1 - TG_RIBBON_SIZE_DP * (RIB - 1) / 2) * DP,
+                  zIndex: 3, overflow: 'visible',
+                }}
+              >
+                <defs>
+                  <linearGradient id="postNftRibbonGrad" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stopColor={ribC} />
+                    <stop offset="1" stopColor={ribE} />
+                  </linearGradient>
+                </defs>
+                <path d={TG_RIBBON_PATH_D} fill="url(#postNftRibbonGrad)" strokeLinejoin="round" />
+                {/* Центр тексту — на осі смуги: у клієнті поворот навколо
+                    (30, 18) і малювання на y=19; для симетрії зверху/знизу
+                    садимо базову лінію рівно в центр смуги. */}
+                <text
+                  x={24 + 6}
+                  y={24 - 3.5}
+                  fill="#fff"
+                  fontSize={TG_RIBBON_TEXT_DP}
+                  fontWeight={700}
+                  fontFamily="Roboto, Arial, sans-serif"
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  transform={`rotate(45 ${24 + 6} ${24 - 6})`}
+                  textLength={number.length > 5 ? TG_RIBBON_TEXT_MAX_W_DP : undefined}
+                  lengthAdjust="spacingAndGlyphs"
+                >
+                  #{number || '—'}
+                </text>
+              </svg>
+            </div>
+          );
+        })()}
+
+        <div className="post-nft__form">
+          <label>
+            Номер
+            <input value={number} onChange={(e) => setNumber(e.target.value.replace(/\D/g, ''))} />
+          </label>
+          <label>
+            Ціна ⭐
+            <input value={price} onChange={(e) => setPrice(e.target.value.replace(/\D/g, ''))} />
+          </label>
+          <button
+            type="button"
+            className="post-block__pick"
+            disabled={busy || !pick.backdrop}
+            onClick={() => void make()}
+          >
+            {busy ? 'Роблю…' : 'Зробити блок для ролика'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Моделі (NFT-варіанти) одного подарунка — другий рівень каталогу.
+ *
+ * У кожного подарунка свій emoji-набір із варіантами; власник заповнює
+ * їх поступово: вставив назву/лінк t.me/addemoji — демон скачає набір,
+ * розпакує і намалює прев'ю. Порожній стан прямо каже, що зробити.
+ */
+function GiftVariants({ gift, takeState, onTake, onClose }: {
+  gift: GiftItem;
+  takeState: { slug: string; state: 'running' | 'done' | 'error'; error?: string } | null;
+  onTake: (variant: string) => void;
+  onClose: () => void;
+}) {
+  interface VariantItem { slug: string; emoji?: string; title?: string }
+  const [doc, setDoc] = useState<{ setTitle?: string; items: VariantItem[] } | null>(null);
+  const [setName, setSetName] = useState('');
+  const [ingest, setIngest] = useState<'idle' | 'running' | 'error'>('idle');
+  const [ingestErr, setIngestErr] = useState<string | null>(null);
+
+  const load = useCallback(async (): Promise<void> => {
+    try {
+      const resp = await fetch(`/api/gifts/${gift.slug}/variants`, { cache: 'no-store' });
+      if (!resp.ok) return;
+      const d = await resp.json() as { setTitle?: string; items?: VariantItem[] };
+      setDoc({ setTitle: d.setTitle, items: d.items ?? [] });
+    } catch {
+      // демон недоступний — порожній стан скаже, що робити
+    }
+  }, [gift.slug]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const startIngest = async (): Promise<void> => {
+    if (!setName.trim()) return;
+    setIngest('running');
+    setIngestErr(null);
+    try {
+      const resp = await fetch(`/api/gifts/${gift.slug}/variants/ingest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ set: setName }),
+      });
+      const data = await resp.json().catch(() => null) as { error?: string } | null;
+      if (!resp.ok) throw new Error(data?.error ?? `HTTP ${resp.status}`);
+      // Набір на сотню емодзі качається кілька хвилин — чекаємо спокійно.
+      for (let i = 0; i < 600; i += 1) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const st = await fetch(`/api/gifts/${gift.slug}/variants/ingest`, { cache: 'no-store' })
+          .then((r) => r.json() as Promise<{ state: string; error?: string }>)
+          .catch(() => null);
+        if (!st || st.state === 'running') continue;
+        if (st.state === 'error') throw new Error(st.error ?? 'скрипт впав');
+        break;
+      }
+      setIngest('idle');
+      setSetName('');
+      await load();
+    } catch (err) {
+      setIngest('error');
+      setIngestErr(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <div className="post-gallery post-gifts__variants">
+      <div className="post-gallery__bar">
+        <button type="button" className="btn" onClick={onClose}>‹ Каталог</button>
+        <span className="post-gallery__title">
+          {gift.title || gift.slug} — моделі
+        </span>
+        {doc?.setTitle ? (
+          <span className="post-motions__hint">{doc.setTitle}</span>
+        ) : null}
+        <span className="post-ws__spacer" />
+        <input
+          className="post-gifts__search"
+          placeholder="t.me/addemoji/… або назва набору"
+          value={setName}
+          onChange={(e) => setSetName(e.target.value)}
+          disabled={ingest === 'running'}
+        />
+        <button
+          type="button"
+          className="btn"
+          disabled={ingest === 'running' || !setName.trim()}
+          onClick={() => void startIngest()}
+        >
+          {ingest === 'running' ? 'Качаю…' : 'Завантажити набір'}
+        </button>
+      </div>
+
+      {ingest === 'error' ? (
+        <div className="post-ws__hint post-gifts__note">⚠ {ingestErr}</div>
+      ) : null}
+
+      <div className="post-gifts__grid">
+        {(doc?.items ?? []).map((v) => {
+          const key = `${gift.slug}:${v.slug}`;
+          const busy = takeState?.slug === key && takeState.state === 'running';
+          const done = takeState?.slug === key && takeState.state === 'done';
+          const failed = takeState?.slug === key && takeState.state === 'error';
+          return (
+            <div key={v.slug} className="post-gifts__cell">
+              <img src={`/api/gifts/${gift.slug}/variants/preview/${v.slug}`} alt="" loading="lazy" />
+              <div className="post-gifts__name">{v.title || `${v.emoji ?? ''} ${v.slug}`}</div>
+              <button
+                type="button"
+                className="post-block__pick"
+                disabled={busy}
+                title={failed ? takeState?.error : 'Покласти модель у набір ролика спрайтом'}
+                onClick={() => onTake(v.slug)}
+              >
+                {busy ? 'Беру…' : done ? 'У наборі ✓' : failed ? 'Не вийшло' : 'Взяти в ролик'}
+              </button>
+            </div>
+          );
+        })}
+        {doc != null && doc.items.length === 0 ? (
+          <div className="post-ws__hint post-gifts__note">
+            Моделей цього подарунка ще нема. Знайди його emoji-набір
+            (наприклад, t.me/addemoji/PlushPepeGifts_by_EmojiRu_Bot),
+            встав лінк угорі і натисни «Завантажити набір».
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Сторінка-галерея: рухи по групах.
+ *
+ * Блок сітки — квадратна СЦЕНА руху (без ведучого й субтитрів: вони
+ * однакові в усіх і лише розмивають різницю). Клік — модал поверх
+ * сторінки з повним кадром і діями: правити в чаті, видалити.
+ *
+ * Час один на всю галерею: єдиний rAF веде спільний лічильник, а кожен
+ * мінікадр бере від нього залишок за модулем своєї тривалості.
+ */
+function MotionGallery({ entries, projectId, poseCards, stickerByPath, onEdit, onNew, onDelete, onClose }: {
+  entries: MotionEntry[];
+  projectId: string;
+  poseCards: PoseCard[];
+  stickerByPath: Map<string, PostFile>;
+  onEdit: (m: MotionEntry) => void;
+  onNew: () => void;
+  onDelete: (id: string) => Promise<void> | void;
+  onClose: () => void;
+}) {
+  const [group, setGroup] = useState<'all' | MotionGroup>('all');
+  const [t, setT] = useState(0.02);
+  const [openId, setOpenId] = useState<string | null>(null);
+  // Видалення — у два кліки на місці, без діалогу: перший показує «точно?»,
+  // другий видаляє. Скидається закриттям модалу.
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    let raf = 0;
+    let last = performance.now();
+    let cur = 0.02;
+    let acc = 0;
+    const tick = (now: number): void => {
+      const dt = Math.min(0.1, (now - last) / 1000);
+      last = now;
+      cur += dt;
+      acc += dt;
+      // Повні кадри всюди: 30 fps для сітки здавались економією, але
+      // безперервні рухи (орбіта смайлів, вльоти) на них читаються
+      // «лагуче» — власник це побачив одразу. Плитки дрібні, React їх
+      // тягне; якщо сітка колись просяде — дросель повертати сюди.
+      if (acc >= 0) {
+        setT(cur);
+        acc = 0;
+      }
+      raf = window.requestAnimationFrame(tick);
+    };
+    raf = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(raf);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      // Спершу закривається модал, потім сторінка — як і очікуєш від Esc.
+      setOpenId((prev) => {
+        if (prev != null) return null;
+        onClose();
+        return prev;
+      });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const shown = entries.filter((m) => group === 'all' || m.group === group);
+  // Відкритий рух шукається щоразу з entries: поллер міняє словник під
+  // час правки з чату, і модал має показувати свіжу версію, а не зліпок.
+  const open = openId != null ? entries.find((m) => m.id === openId) ?? null : null;
+
+  return (
+    <div className="post-gallery" role="dialog" aria-label="Галерея рухів">
+      <div className="post-gallery__bar">
+        <span className="post-gallery__title">Анімації</span>
+        <div className="post-gallery__groups">
+          <button
+            type="button"
+            className={`post-gallery__group${group === 'all' ? ' is-on' : ''}`}
+            onClick={() => setGroup('all')}
+          >
+            Всі
+          </button>
+          {MOTION_GROUPS.map((g) => (
+            <button
+              key={g.key}
+              type="button"
+              className={`post-gallery__group${group === g.key ? ' is-on' : ''}`}
+              onClick={() => setGroup(g.key)}
+            >
+              {g.label}
+              <i>{entries.filter((m) => m.group === g.key).length}</i>
+            </button>
+          ))}
+        </div>
+        <span className="post-ws__spacer" />
+        <button type="button" className="btn" onClick={onClose}>Закрити</button>
+      </div>
+
+      <div className="post-gallery__grid">
+        {shown.map((m) => {
+          // Рух без предметів і карток (пауза) у вікні-сцені показував
+          // би голе тло: його суть — ведучий і субтитр, а вони живуть у
+          // нижній частині кадру, за межами квадратного вікна. Такому
+          // руху сцена показує ПОВНИЙ кадр, вписаний у квадрат.
+          const bare = m.demo != null
+            && !(m.demo.stickers?.length ?? 0)
+            && !(m.demo.cards?.length ?? 0);
+          return (
+            <button
+              key={m.id}
+              type="button"
+              className="post-gcard"
+              onClick={() => {
+                setOpenId(m.id);
+                setArmed(false);
+              }}
+            >
+              <span className={`post-gcard__scene${bare ? ' is-full' : ''}`}>
+                {m.demo ? (
+                  <MotionMiniFrame
+                    demo={m.demo}
+                    time={t % m.demo.duration}
+                    projectId={projectId}
+                    poseCards={poseCards}
+                    stickerByPath={stickerByPath}
+                    full={bare}
+                  />
+                ) : (
+                  <span className="post-gcard__none">без прев'ю</span>
+                )}
+              </span>
+              <span className="post-gcard__name">{m.title}</span>
+            </button>
+          );
+        })}
+
+        {/* Блок «+» — замовлення нового руху через чат. */}
+        <button type="button" className="post-gcard post-gcard--plus" onClick={onNew}>
+          <span className="post-gcard__plus" aria-hidden>+</span>
+          <span className="post-gcard__name">Нова анімація</span>
+          <span className="post-gcard__pick">опиши в чаті — зберу демо</span>
+        </button>
+      </div>
+
+      {open ? (
+        <div className="post-gmodal" role="dialog" aria-label={open.title}>
+          <div
+            className="post-gmodal__scrim"
+            aria-hidden
+            onClick={() => setOpenId(null)}
+          />
+          <div className="post-gmodal__body">
+            <div className="post-gmodal__frame">
+              {open.demo ? (
+                <MotionMiniFrame
+                  demo={open.demo}
+                  time={t % open.demo.duration}
+                  projectId={projectId}
+                  poseCards={poseCards}
+                  stickerByPath={stickerByPath}
+                  full
+                />
+              ) : (
+                <div className="post-ws__frame post-mini__frame post-gcard__none">
+                  <span>без прев'ю — дивись у ролику</span>
+                </div>
+              )}
+            </div>
+            <div className="post-gmodal__side">
+              <div className="post-gmodal__title">{open.title}</div>
+              {open.pick ? <div className="post-gcard__pick">{open.pick}</div> : null}
+              <div className="post-motion__detail">
+                {open.enter ? <div><b>Вхід.</b> {open.enter}</div> : null}
+                {open.inside ? <div><b>У кадрі.</b> {open.inside}</div> : null}
+                {open.exit ? <div><b>Вихід.</b> {open.exit}</div> : null}
+                {open.axes?.length ? <div><b>Осі:</b> {open.axes.join(' · ')}</div> : null}
+                {open.fixed?.length ? <div><b>Не чіпати:</b> {open.fixed.join(' · ')}</div> : null}
+                {open.avoid ? <div><b>Не брати, коли:</b> {open.avoid}</div> : null}
+                {open.from?.length ? (
+                  <div><b>Живі приклади:</b> {open.from.join(' · ')}</div>
+                ) : null}
+              </div>
+              <div className="post-gmodal__actions">
+                <button type="button" className="btn" onClick={() => onEdit(open)}>
+                  Правити в чаті
+                </button>
+                <button
+                  type="button"
+                  className={`btn post-gmodal__del${armed ? ' is-armed' : ''}`}
+                  onClick={() => {
+                    if (!armed) {
+                      setArmed(true);
+                      return;
+                    }
+                    void onDelete(open.id);
+                    setOpenId(null);
+                  }}
+                >
+                  {armed ? 'Точно видалити?' : 'Видалити'}
+                </button>
+                <span className="post-ws__spacer" />
+                <button type="button" className="btn" onClick={() => setOpenId(null)}>
+                  Закрити
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+

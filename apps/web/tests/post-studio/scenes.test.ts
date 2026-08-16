@@ -167,11 +167,19 @@ describe('cardRevealCount', () => {
 });
 
 describe('cardMotion', () => {
-  it('приїжджає знизу і сідає на місце', () => {
+  it('приїжджає справа по рівній лінії і сідає на місце', () => {
+    // Вхід — чиста горизонталь. Вертикальний доданок був, і саме він
+    // разом із проскоком по X давав дугу: з подарунком у слоті вона
+    // читалась як два предмети, що сходяться, а не одна річ, що
+    // приїхала. Догори картка йде тільки на виході.
     const start = cardMotion(0, 4);
-    expect(start.y).toBeGreaterThan(3);
+    expect(start.x).toBeGreaterThan(50);
+    expect(start.y).toBe(0);
     expect(start.scale).toBeLessThan(1);
+    const mid = cardMotion(CARD_IN_S / 2, 4);
+    expect(mid.y).toBe(0);
     const settled = cardMotion(CARD_IN_S, 4);
+    expect(settled.x).toBeCloseTo(0, 2);
     expect(settled.y).toBeCloseTo(0, 2);
     expect(settled.scale).toBeCloseTo(1, 2);
   });
@@ -249,5 +257,119 @@ describe('checkPost', () => {
   it('позначає наголос, на який кадр не відповів', () => {
     const f = checkPost({ ...base, stickers: [{ id: 'a', word: 0, hold: 6, label: 'ти' }] });
     expect(f.some((x) => x.what.includes('наголос'))).toBe(true);
+  });
+});
+
+/*
+ * Геометрія кадру. Кожен випадок тут — не вигаданий: усе це справді
+ * стояло в ролику 16.08 і жодного разу не потрапило в перевірку, бо
+ * вона дивилась лише на час. Ловив власник, оком, по одному за
+ * повідомлення.
+ */
+describe('checkPost — геометрія', () => {
+  const words: WordTiming[] = Array.from({ length: 12 }, (_, i) => ({
+    word: `w${i}`, start: i, end: i + 0.4,
+  }));
+  const base = {
+    version: 1 as const,
+    title: 't',
+    preset: 'vibe-light' as const,
+    audio: null,
+    script: '',
+    words,
+    beats: [],
+  };
+  const CARD = 'assets/blocks/nft-card-onyx-black.html';
+  const geom = (f: ReturnType<typeof checkPost>, needle: string): boolean =>
+    f.some((x) => x.level === 'warn' && x.what.includes(needle));
+
+  it('ловить пару, що розʼїхалась на вході', () => {
+    // Рівно баг 16.08: подарунок заходив на пів секунди раніше за свою
+    // картку, стояв вільним стікером і аж тоді стрибав у слот.
+    const f = checkPost({
+      ...base,
+      stickers: [{ id: 'gift', word: 0, hold: 6 }],
+      cards: [{ id: 'c', word: 1, hold: 5, file: CARD }],
+    });
+    expect(geom(f, 'живуть різними відрізками')).toBe(true);
+  });
+
+  it('ловить хвіст, де картка стоїть із порожнім слотом', () => {
+    const f = checkPost({
+      ...base,
+      stickers: [{ id: 'gift', word: 1, hold: 4 }],
+      cards: [{ id: 'c', word: 1, hold: 6, file: CARD }],
+    });
+    expect(geom(f, 'живуть різними відрізками')).toBe(true);
+  });
+
+  it('мовчить, коли пара живе одним відрізком', () => {
+    const f = checkPost({
+      ...base,
+      stickers: [{ id: 'gift', word: 1, hold: 5 }],
+      cards: [{ id: 'c', word: 1, hold: 5, file: CARD }],
+    });
+    expect(geom(f, 'різними відрізками')).toBe(false);
+    expect(geom(f, 'порожнім слотом')).toBe(false);
+  });
+
+  it('ловить картку колекційного без предмета в слоті', () => {
+    const f = checkPost({ ...base, cards: [{ id: 'c', word: 1, hold: 5, file: CARD }] });
+    expect(geom(f, 'порожнім слотом')).toBe(true);
+  });
+
+  it('ловить два предмети, що цілять в один слот', () => {
+    // Слот один: студія поставить обидва туди ж, один на одного.
+    const f = checkPost({
+      ...base,
+      stickers: [
+        { id: 'a', word: 1, hold: 5 },
+        { id: 'b', word: 2, hold: 3 },
+      ],
+      cards: [{ id: 'c', word: 1, hold: 5, file: CARD }],
+    });
+    expect(geom(f, 'цілять')).toBe(true);
+  });
+
+  it('ловить плашку, яку наступна ховає за картку раніше, ніж її прочитають', () => {
+    // Наслідок конвеєра: на картці попередня плашка не відʼїжджає вбік,
+    // а йде ЗА неї — тобто зникає, а не тьмяніє.
+    const f = checkPost({
+      ...base,
+      stickers: [{
+        id: 'gift',
+        word: 1,
+        hold: 8,
+        badges: [
+          { text: 'довга плашка про рідкості', at: 2 },
+          { text: 'друга', at: 3 },
+        ],
+      }],
+      cards: [{ id: 'c', word: 1, hold: 8, file: CARD }],
+    });
+    expect(geom(f, 'ховає наступна')).toBe(true);
+  });
+
+  it('звичайна картка під ці правила не потрапляє', () => {
+    // Слот є лише в картці колекційного; для решти «порожній слот» —
+    // не поняття, і сварка тут була б шумом.
+    const f = checkPost({
+      ...base,
+      cards: [{ id: 'c', word: 1, hold: 5, file: 'assets/blocks/where-to-look.html' }],
+    });
+    expect(geom(f, 'порожнім слотом')).toBe(false);
+  });
+
+  it('ловить плашку, ширшу за кадр', () => {
+    const f = checkPost({
+      ...base,
+      stickers: [{
+        id: 'a',
+        word: 0,
+        hold: 8,
+        badges: [{ text: 'ця плашка така довга, що обріжеться з обох боків кадру', at: 1 }],
+      }],
+    });
+    expect(geom(f, 'ширша за кадр')).toBe(true);
   });
 });

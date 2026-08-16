@@ -12,6 +12,212 @@
 
 export const CANVAS = { w: 1080, h: 1920, fps: 30 } as const;
 
+/*
+ * Картка колекційного подарунка — ТОЧНО за мобільним клієнтом Telegram
+ * (Android, DrKLO/Telegram: ui/Gifts/GiftSheet.java · ui/Stars/
+ * StarGiftPatterns.java). Усі числа в dp; масштаб задає споживач.
+ *
+ * Клітинка сітки маркетплейсу (GiftCell): картка з кутами 11 dp,
+ * стікер 80×80 по центру з відступом 12 зверху/знизу, ціна — пігулка
+ * 26 dp заввишки, 12 dp bold, padding 10; стрічка — Ribbon у правому
+ * верхньому куті (marginTop 2, marginRight 1).
+ */
+
+/** Радіус кутів картки, dp (CardBackground: r = dp(11)). */
+/**
+ * Слот для подарунка в картці колекційного (блок `nft-card-*.html`).
+ *
+ * Числа тут мусять збігатися з тими, якими демон малює саму картку
+ * (`apps/daemon/src/routes/project/render.ts`, правило `.nftc__slot`) —
+ * інакше подарунок стоїть поруч зі своїм слотом, а не в ньому.
+ * Подарунок ставиться сюди окремим анімованим стікером, а не
+ * запікається в картку.
+ */
+/* Картка 352×440 px полотна (128×160 dp × 2.75), центрована по ширині
+   1080, відступ згори 40 px (`.nftc-wrap { margin: 40px auto 0 }`).
+   Стрічка з номером виступає за верхній край на 9 px
+   (`.nftc__ribbon { top: -9px }`). */
+const NFT_CARD_W = 352;
+const NFT_CARD_H = 440;
+const NFT_CARD_TOP = 40;
+const NFT_RIBBON_OVER = 9;
+/* Слот — 80×80 dp = 220×220 px, від верху картки на 12 dp = 33 px. */
+const NFT_SLOT_INSET = 33;
+const NFT_SLOT_SIZE = 220;
+
+export const NFT_CARD_SLOT = {
+  // По ГОРИЗОНТАЛІ демон слот ЦЕНТРУЄ: `left: (W - 80*DP)/2` = 66 px, а
+  // не 33 (12 dp). Відступ 12 dp у клієнті тільки зверху й знизу —
+  // картка вища за широку. Доти тут стояло 33, і подарунок сидів на
+  // 33 px лівіше за власний слот.
+  left: ((1080 - NFT_CARD_W) / 2 + (NFT_CARD_W - NFT_SLOT_SIZE) / 2) / 1080,
+  width: NFT_SLOT_SIZE / 1080,
+  topPx: NFT_CARD_TOP + NFT_SLOT_INSET,
+  sizePx: NFT_SLOT_SIZE,
+  /* Коробка самої картки — нею міряються бейджі: предмет у слоті це
+     подарунок, а в кадрі «предмет» — уся картка. */
+  cardLeft: ((1080 - NFT_CARD_W) / 2) / 1080,
+  cardWidth: NFT_CARD_W / 1080,
+  cardTopPx: NFT_CARD_TOP,
+  cardHeightPx: NFT_CARD_H,
+  /*
+   * Наскільки вся зв'язка «картка + подарунок + бейджі» опущена від
+   * верху зони стікерів. Одне число на всіх, тому вони не роз'їдуться.
+   *
+   * Вікно вузьке з обох боків. Знизу: низ картки (drop + 40 + 440 від
+   * верху зони на 13 %) не сміє дійти до смуги субтитрів на 42 % —
+   * стеля 76. Згори: верхня плашка тепер стоїть НАД карткою, і її верх
+   * не сміє піднятись вище безпечної лінії Instagram (250 px) —
+   * підлога 69. Беремо 68 з поправкою на те, що плашка на появі
+   * приїжджає знизу вгору, а не навпаки.
+   */
+  dropPx: 68,
+  /*
+   * Скільки плашка стоїть над верхнім краєм картки: виступ стрічки
+   * (9 px) плюс 14 px повітря.
+   *
+   * Місце в неї одне — НАД карткою. Збоку його немає й бути не може:
+   * найкоротша плашка ролика ≈ 376 px, найдовша ≈ 580, а картка — 352
+   * при полях кадру по 364. Поставлена збоку, вона або лягає на картку,
+   * або лізе за край. Тому попередні плашки не роз'їжджаються вбік, як
+   * у стікера, а йдуть ЗА КАРТКУ (`badgePopSlide` + ранг).
+   */
+  badgeGapPx: NFT_RIBBON_OVER + 14,
+  pxToHeight: (1 / 1080) * (CANVAS.w / CANVAS.h),
+} as const;
+
+export const TG_CARD_RADIUS_DP = 11;
+
+/**
+ * Картка колекційного за файлом блоку.
+ *
+ * Ознака одна на всю студію: кадр по ній вирішує, ставити подарунок у
+ * СЛОТ чи поруч, а перевірка — чи міряти пару «подарунок + картка».
+ * Тримається тут, а не двома однаковими регулярками по місцях.
+ */
+export function isNftCard(file: string): boolean {
+  return /(^|\/)nft-card-[^/]*\.html$/.test(file);
+}
+
+/**
+ * Безпечна лінія Instagram: вище неї кадр перекриває шапка застосунку.
+ * Усе, що має читатись, мусить починатись нижче.
+ */
+export const IG_SAFE_TOP_PX = 250;
+
+/**
+ * Ширина плашки в пікселях полотна — оцінка з довжини тексту.
+ *
+ * Кегль 4.3 cqw = 46.4 px, Arial Bold ≈ 0.55em на знак, поля 0.75em з
+ * боків. Точність тут не потрібна й недосяжна (гліфи різні): перевірка
+ * відповідає на «влазить чи ні», а не малює.
+ */
+export function badgeWidthPx(text: string): number {
+  const f = 0.043 * CANVAS.w;
+  return text.trim().length * 0.55 * f + 2 * 0.75 * f;
+}
+
+/**
+ * Патерн TYPE_GIFT (StarGiftPatterns.patternLocations[2]): координати
+ * ЦЕНТРУ кожного символу відносно центру картки в dp, розмір у dp,
+ * прозорість. Дванадцять символів навколо порожнього центру.
+ */
+export const TG_PATTERN_GIFT: ReadonlyArray<{ x: number; y: number; size: number; alpha: number }> = [
+  { x: -0.83, y: -52.16, size: 12.33, alpha: 0.2 },
+  { x: 26.66, y: -40.33, size: 16, alpha: 0.2 },
+  { x: 44.16, y: -20.5, size: 12.33, alpha: 0.2 },
+  { x: 53, y: 7.33, size: 16, alpha: 0.2 },
+  { x: 31, y: 23.66, size: 14.66, alpha: 0.2 },
+  { x: 0, y: 32, size: 13.33, alpha: 0.2 },
+  { x: -29, y: 23.66, size: 14, alpha: 0.2 },
+  { x: -53, y: 7.33, size: 16, alpha: 0.2 },
+  { x: -44.5, y: -20.16, size: 12.33, alpha: 0.2 },
+  { x: -27.33, y: -40.33, size: 16, alpha: 0.2 },
+  { x: 43.66, y: 50, size: 14.66, alpha: 0.2 },
+  { x: -41.66, y: 48, size: 14.66, alpha: 0.2 },
+];
+
+/**
+ * Патерн TYPE_DEFAULT (patternLocations[0]) — великий, 18 символів; у
+ * клієнті ним малюють великі картки (сторінка подарунка), а в сітці він
+ * підмішується при анімації. Для вертикальної картки клієнт міняє
+ * x↔y (w < h). Координати центрів у dp.
+ */
+export const TG_PATTERN_DEFAULT: ReadonlyArray<{ x: number; y: number; size: number; alpha: number }> = [
+  { x: 83.33, y: 24, size: 27.33, alpha: 0.22 },
+  { x: 68.66, y: 75.33, size: 25.33, alpha: 0.21 },
+  { x: 0, y: 86, size: 25.33, alpha: 0.12 },
+  { x: -68.66, y: 75.33, size: 25.33, alpha: 0.21 },
+  { x: -82.66, y: 13.66, size: 27.33, alpha: 0.22 },
+  { x: -80, y: -33.33, size: 20, alpha: 0.24 },
+  { x: -46.5, y: -63.16, size: 27, alpha: 0.21 },
+  { x: 1, y: -82.66, size: 20, alpha: 0.15 },
+  { x: 46.5, y: -63.16, size: 27, alpha: 0.21 },
+  { x: 80, y: -33.33, size: 19.33, alpha: 0.24 },
+  { x: 115.66, y: -63, size: 20, alpha: 0.15 },
+  { x: 134, y: -10.66, size: 20, alpha: 0.18 },
+  { x: 118.66, y: 55.66, size: 20, alpha: 0.15 },
+  { x: 124.33, y: 98.33, size: 20, alpha: 0.11 },
+  { x: -128, y: 98.33, size: 20, alpha: 0.11 },
+  { x: -108, y: 55.66, size: 20, alpha: 0.15 },
+  { x: -123.33, y: -10.66, size: 20, alpha: 0.18 },
+  { x: -116, y: -63.33, size: 20, alpha: 0.15 },
+];
+
+/**
+ * Стрічка (GiftSheet.RibbonDrawable.fillRibbonPath): контур 48×48 dp із
+ * заокругленими підворотами; малюється в правому верхньому куті картки
+ * (translate(right − 48, top)), кути шляху згладжені CornerPathEffect
+ * 2.33 dp. Текст 10 dp bold, повернутий на 45° навколо точки
+ * (24 + 6, 24 − 6), стиснутий до 40 dp завширшки. Колір — градієнт
+ * від (0,0) до (48,48): center→edge, обидва через adaptHSV
+ * (насиченість +0.05, яскравість −0.10).
+ */
+export const TG_RIBBON_SIZE_DP = 48;
+export const TG_RIBBON_PATH_D =
+  'M46.83 24.5 L23.5 1.17 C22.75 0.42 21.73 0 20.68 0 C19.62 0 2.73 0.05 1.55 0.05 '
+  + 'C0.36 0.05 -0.23 1.4885 0.6 2.32 L45.72 47.44 C46.56 48.28 48 47.68 48 46.5 '
+  + 'C48 45.31 48 28.38 48 27.32 C48 26.26 47.5 25.24 46.82 24.5 Z';
+export const TG_RIBBON_TEXT_DP = 10;
+export const TG_RIBBON_TEXT_MAX_W_DP = 40;
+export const TG_RIBBON_HSV_SAT = 0.05;
+export const TG_RIBBON_HSV_VAL = -0.10;
+
+/**
+ * Зірка Stars — з веб-клієнта Telegram (tweb/assets/icons/star.svg,
+ * viewBox 24). Path 1:1.
+ */
+export const TG_ICON_STAR_D = "M11.4664 17.7532L6.96555 20.5105C6.49754 20.7972 5.88574 20.6502 5.59904 20.1822C5.45901 19.9536 5.41726 19.6782 5.48327 19.4184L6.18 16.676C6.4315 15.6861 7.10892 14.8586 8.02968 14.4165L12.9399 12.059C13.1688 11.9491 13.2653 11.6745 13.1553 11.4455C13.0663 11.2602 12.8651 11.1564 12.6624 11.1915L7.19676 12.1377C6.08572 12.3301 4.94636 12.0233 4.08213 11.299L2.35549 9.85207C1.93483 9.49955 1.8796 8.87276 2.23212 8.45211C2.40357 8.24752 2.65013 8.1205 2.91625 8.09968L8.19167 7.68682C8.56437 7.65765 8.88916 7.4218 9.03224 7.07642L11.0674 2.16367C11.2774 1.65662 11.8588 1.41586 12.3658 1.62591C12.6093 1.72677 12.8027 1.92021 12.9036 2.16367L14.9388 7.07642C15.0818 7.4218 15.4066 7.65765 15.7793 7.68682L21.0837 8.10194C21.6309 8.14477 22.0397 8.62304 21.9969 9.17021C21.9763 9.43343 21.8518 9.67763 21.6509 9.84891L17.6055 13.2978C17.3207 13.5405 17.1964 13.9227 17.284 14.2866L18.5277 19.4531C18.6561 19.9867 18.3277 20.5234 17.7941 20.6519C17.5377 20.7136 17.2673 20.6709 17.0424 20.5331L12.5046 17.7532C12.186 17.5581 11.7849 17.5581 11.4664 17.7532Z";
+
+/** adaptHSV з Theme.java: зсув насиченості (лише коли 0.1<s<0.9) і яскравості. */
+export function tgAdaptHsv(hex: string, sat: number, val: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  if (Number.isNaN(n)) return hex;
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  let h = 0;
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60; if (h < 0) h += 360;
+  }
+  let s = max === 0 ? 0 : d / max;
+  let v = max;
+  if (s > 0.1 && s < 0.9) s = Math.min(1, Math.max(0, s + sat));
+  v = Math.min(1, Math.max(0, v + val));
+  const c = v * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = v - c;
+  let rr = 0, gg = 0, bb = 0;
+  if (h < 60) [rr, gg, bb] = [c, x, 0];
+  else if (h < 120) [rr, gg, bb] = [x, c, 0];
+  else if (h < 180) [rr, gg, bb] = [0, c, x];
+  else if (h < 240) [rr, gg, bb] = [0, x, c];
+  else if (h < 300) [rr, gg, bb] = [x, 0, c];
+  else [rr, gg, bb] = [c, 0, x];
+  const ch = (q: number): string => Math.round((q + m) * 255).toString(16).padStart(2, '0');
+  return `#${ch(rr)}${ch(gg)}${ch(bb)}`;
+}
+
 export type PresetId = 'vibe-light';
 
 /** Один шар композиції — порядок знизу вгору фіксований пресетом. */
@@ -87,16 +293,28 @@ export const PRESETS: Record<PresetId, PostPreset> = {
     // Крок сітки вдвічі дрібніший за попередні 54 px: клітинка стала
     // ближчою до паперу в клітинку, а не до плану приміщення.
     // Лінії помітно темніші за тло: різниця в один-два відтінки зникала
-    // на превʼю і зовсім гинула під світлом від підлоги.
-    backdrop: { background: '#EFEFEC', gridColor: '#CFCFC6', gridStep: 27, gridWidth: 1 },
+    // на превʼю і зовсім гинула під світлом від підлоги. Освітлювати їх
+    // пробували — підлога ставала невидимою в готовому mp4. Тепер навпаки:
+    // 41 відтінок різниці, бо компресія й перегляд із телефона з'їдають
+    // ще кілька, і те, що на моніторі виглядає рівно, у стрічці зникає.
+    backdrop: { background: '#EFEFEC', gridColor: '#C6C6BC', gridStep: 27, gridWidth: 1 },
     captions: {
       fontFamily: 'Arial Black, Arial, sans-serif',
       fontSize: 110,
       color: '#111111',
       stroke: '#FFFFFF',
       strokeWidth: 6,
-      top: 0.38,
-      bottom: 0.62,
+      /*
+       * Смуга субтитрів. Малює її CSS (`.post-ws__caption { top: 42%;
+       * height: 16% }`), а ці числа — те саме, чим користується
+       * перевірка геометрії. Доти тут стояло 0.38/0.62, і ніхто цього
+       * не помічав, бо жоден рядок коду їх не читав: смуга жила ЛИШЕ у
+       * стилях. Правити доводиться в двох місцях — це відомий борг
+       * («перенести правила кадру з CSS у format.md»); поки він
+       * висить, ці числа й правило CSS мусять рухатись разом.
+       */
+      top: 0.42,
+      bottom: 0.58,
       uppercase: true,
       fadeMs: 60,
       accentBg: '#FFE500',
@@ -175,7 +393,18 @@ export interface ScenePlan {
   kind: 'stickers' | 'page' | 'none';
   /** Ідентифікатори стікерів або файл сторінки. */
   items?: string[];
-  /** Як рухається — словами, поки словник рухів не заведено. */
+  /**
+   * Id руху зі словника (assets/motions.json), узятого за основу для
+   * цієї сцени: "hook-solo-lead", "empty-face", …
+   *
+   * Раніше тут був вільний текст «поки словник рухів не заведено» —
+   * словник заведено, і поле стало ЗАПИСАНИМ ВИБОРОМ. Саме по ньому
+   * checkPost звіряє бюджет ролика: один гак, одне кільце, квоти
+   * карток і пауз. Вибір, який не записано, неможливо перевірити.
+   *
+   * Старі ролики з прозою в цьому полі лишаються робочими: перевірка
+   * бюджету рахує лише значення, що збігаються з id словника.
+   */
   motion?: string;
   /** Чому саме так. Найцінніше поле: воно переживає перегенерацію. */
   why?: string;
@@ -227,7 +456,81 @@ export interface Beat {
  * Тому час береться з `words[word].start`, тобто з того самого джерела,
  * що й субтитри. Вирівнювати руками нема чого.
  */
-export type StickerEnter = 'instant' | 'pop' | 'from-right' | 'from-left' | 'from-bottom';
+/** Розкладка спрайт-аркуша: сітка кадрів у PNG. */
+export interface StickerSprite {
+  frames: number;
+  cols: number;
+  rows: number;
+  fps: number;
+}
+
+export type StickerEnter =
+  | 'instant' | 'pop' | 'from-right' | 'from-left' | 'from-bottom'
+  | 'flip' | 'drop' | 'stamp' | 'spin';
+
+/**
+ * Вихід стікера. Історично був один на всіх («сів і згас») — це навіть
+ * стояло в motion-library як «чого студія не вміє». Тепер вихід — така
+ * сама вісь композиції, як вхід.
+ */
+export type StickerExit = 'shrink' | 'flip-out' | 'drop-out' | 'whoosh-up' | 'dissolve';
+
+/**
+ * Орнамент навколо предмета і зв'язка між двома предметами — підглянуто
+ * в референсів: рукописні стрілки «дивись сюди», дрібні кружечки-
+ * сателіти, дуга «A стає B», іскри конфлікту. Це ТРЕТІЙ шар виразності
+ * поверх входів/виходів: предмет стоїть, а кадр працює.
+ */
+export type OrnamentKind = 'arrows' | 'satellites';
+export type OrnamentTone = 'warn' | 'info' | 'ok';
+export interface StickerOrnament {
+  kind: OrnamentKind;
+  /** Скільки елементів: стрілок 3–5 (дефолт 4), кружечків 4–7 (дефолт 6). */
+  count?: number;
+  /** Колір кружечків; стрілки завжди чорнильні. */
+  tone?: OrnamentTone;
+}
+export type StickerLinkKind = 'arrow' | 'sparks';
+export interface StickerLink {
+  kind: StickerLinkKind;
+  /** id стікера-джерела; зв'язка живе, лише поки живі ОБИДВА. */
+  from: string;
+}
+
+/** Затримка орнаменту після появи предмета і крок черги елементів. */
+export const ORNAMENT_DELAY_S = 0.38;
+export const ORNAMENT_STEP_S = 0.16;
+export const ORNAMENT_GROW_S = 0.28;
+
+/**
+ * Проростання i-того елемента орнаменту, 0…1. Черга навмисна: стрілки,
+ * що з'явились разом, читаються як рамка-штамп, а по одній — як живі
+ * позначки, які хтось домальовує.
+ */
+export function ornamentPop(age: number, i: number): number {
+  const p = (age - ORNAMENT_DELAY_S - i * ORNAMENT_STEP_S) / ORNAMENT_GROW_S;
+  return smooth(Math.min(Math.max(p, 0), 1));
+}
+
+/**
+ * Слоти стрілок у координатах обгортки 180×180 (коробка предмета —
+ * центральні 40…140). Порядок фіксований: перша стрілка — зліва зверху,
+ * як у людини, що малює позначки навколо картинки.
+ */
+export const ARROW_SLOTS: ReadonlyArray<{ x: number; y: number }> = [
+  { x: 22, y: 52 },
+  { x: 158, y: 62 },
+  { x: 34, y: 136 },
+  { x: 150, y: 142 },
+  { x: 90, y: 12 },
+];
+
+/** Тони кружечків-сателітів — ті самі два голоси кадру плюс «успіх». */
+export const ORNAMENT_TONE_COLOR: Record<OrnamentTone, string> = {
+  warn: '#ff3b30',
+  info: '#2f6fed',
+  ok: '#34c759',
+};
 
 /**
  * Бейдж — коротка плашка над стікером: «−10 хв», «×3», «{}».
@@ -288,8 +591,45 @@ export interface Sticker {
    * `from-right` / `from-left` — виїжджає з-за краю кадру. Так заходить
    * ДРУГИЙ предмет, коли перший уже стоїть: рух іззовні читається як
    * поява нової дійової особи, а не як підміна картинки.
+   * `flip` — розворот із ребра (був повернутий боком, став обличчям).
+   * `drop` — падає згори зі сплюском при ударі.
+   * `stamp` — печатка: завеликий і прозорий притискається в місце.
+   * `spin` — виростає з довертанням проти годинникової.
    */
   enter?: StickerEnter;
+  /**
+   * Як іде з кадру. Порожньо — `shrink`, історичний «сів і згас».
+   * `flip-out` — розвертається на ребро (дзеркалить flip-вхід).
+   * `drop-out` — зривається вниз із нахилом, як упущений.
+   * `whoosh-up` — вилітає вгору, стискаючись, як запущений.
+   * `dissolve` — розчиняється з розмиттям: для «минулого» і «мрій».
+   */
+  exit?: StickerExit;
+  /**
+   * Предмет стоїть мертво: без дрейфу і дихання. Для кадрів, де рух
+   * несе орнамент (смайли по орбіті) — два рухи разом дають кашу.
+   */
+  still?: boolean;
+  /**
+   * Файл — спрайт-аркуш: сітка кадрів у одному PNG, кадр вибирається
+   * з віку предмета (seek-safe, як LottieSticker). Це шлях для
+   * Telegram-емодзі (TGS): lottie-web їх мовчки НЕ малює — рендерить
+   * rlottie у кадри, кадри клеяться в аркуш.
+   */
+  sprite?: StickerSprite;
+  /**
+   * Орнамент НАВКОЛО предмета — живе і вмирає разом із ним.
+   * `arrows` — рукописні стрілки з боків, що вказують на предмет
+   * («дивись сюди»); `satellites` — дрібні кружечки, що розлітаються
+   * з-за предмета і висять поруч («навколо нього щось відбувається»).
+   */
+  ornament?: StickerOrnament;
+  /**
+   * Зв'язка з ІНШИМ живим стікером (`from` — його id): `arrow` — дуга
+   * від нього до цього («стає», «веде до»), `sparks` — іскри конфлікту
+   * посередині («сваряться»). Малюється, лише поки живі обидва.
+   */
+  link?: StickerLink;
   /**
    * Дрібні плашки, що злітають над стікером і НАКОПИЧУЮТЬСЯ («−10 хв»
    * ×3). Саме вони роблять кадр живим при одній картинці: предмет
@@ -344,6 +684,47 @@ export interface Sticker {
  * відкритий стан, вирішує CSS самої картки. Це єдине, що студія
  * нав'язує, і воно про ЧАС, а не про вигляд.
  */
+/**
+ * Міні-стікер НА картці (підглянуто в референсів: суддя на куті посту,
+ * трійця на краю плашки). Сідає на порожнє місце картки на своєму
+ * слові і живе до її кінця. `spot` вибирає АГЕНТ, дивлячись, де в
+ * розмітці порожньо — центр стікера стає на край/кут, тож половина
+ * навмисно виступає за картку, як наліпка.
+ */
+export type CardStickerSpot = 'tl' | 'tr' | 'bl' | 'br' | 'l' | 'r';
+export type CardStickerFrom = 'right' | 'left' | 'top';
+export interface CardSticker {
+  /** Файл стікера з набору проєкту. */
+  file: string;
+  /** Слово, на якому стікер сідає. Джерело часу те саме — words. */
+  word: number;
+  /** Де на картці порожньо. Дефолт — правий нижній кут. */
+  spot?: CardStickerSpot;
+  /** Ширина в частках ширини картки. Дефолт 0.16. */
+  size?: number;
+  /**
+   * Звідки влітає: з-за правого краю екрана, лівого чи згори. Порожньо —
+   * за місцем: лівим spot'ам зліва, правим справа. Вліт через усю
+   * картку (лівий spot справа) — теж легальний хід, але свідомий.
+   */
+  from?: CardStickerFrom;
+}
+
+export const CARD_STICKER_IN_S = 0.55;
+
+/**
+ * Вліт наліпки на картку: З-ЗА ПРАВОГО КРАЮ екрана до свого місця,
+ * справа наліво. Повертає прогрес шляху: 1 — ще за екраном, 0 — на
+ * місці; проскакує ціль на 6 % і повертається — зупинка рівно на місці
+ * читається як приклеєна. Політ фізичний, тому без фейду.
+ */
+export function cardStickerFly(age: number): number {
+  const p = Math.min(Math.max(age / CARD_STICKER_IN_S, 0), 1);
+  return p < 0.62
+    ? 1 - 1.06 * easeOut(p / 0.62)
+    : -0.06 + 0.06 * smooth((p - 0.62) / 0.38);
+}
+
 export interface Card {
   id: string;
   /** Слово, на якому картка зʼявляється. Джерело часу те саме — words. */
@@ -354,6 +735,8 @@ export interface Card {
   file: string;
   /** Що на картці, одним рядком — підпис у панелі. */
   note?: string;
+  /** Міні-стікер на порожньому місці картки. Порожньо — без нього. */
+  sticker?: CardSticker;
 }
 
 /**
@@ -410,17 +793,28 @@ export const CARD_OUT_S = 0.4;
 export function cardMotion(
   age: number,
   hold: number,
-): { y: number; scale: number; opacity: number } {
+): { x: number; y: number; scale: number; opacity: number } {
   const left = hold - age;
   if (left <= CARD_OUT_S) {
     const q = smooth(Math.min(Math.max(1 - left / CARD_OUT_S, 0), 1));
-    return { y: -3 * q, scale: 1 - 0.05 * q, opacity: 1 - q };
+    return { x: 0, y: -3 * q, scale: 1 - 0.05 * q, opacity: 1 - q };
   }
   const p = Math.min(Math.max(age / CARD_IN_S, 0), 1);
   const e = easeOut(p);
-  // Без проявлення: коробка приїжджає знизу вже щільною. Напівпрозора
-  // картка читається як недомальована, а не як така, що приходить.
-  return { y: 7 * (1 - e), scale: 0.94 + 0.06 * e, opacity: 1 };
+  // Приїзд СПРАВА: картка в'їжджає з-за правого краю з невеликим
+  // проскоком (як бічний вхід стікера) — рух іззовні читається як
+  // «прийшла нова річ», а не як підміна кадру. Без проявлення:
+  // напівпрозора картка читається як недомальована.
+  const x = p < 0.72
+    ? 120 * (1 - easeOut(p / 0.72))
+    : -2 + 2 * smooth((p - 0.72) / 0.28);
+  // Вхід — РІВНА горизонталь. Був ще підйом `2 * (1 - e)`: картка
+  // стартувала на 2 % нижче й дотягувалась угору, і разом із проскоком
+  // по X виходила дуга. Поки картка їхала сама, це читалось як осідання;
+  // з подарунком у слоті — як два предмети, що сходяться в кадрі.
+  // Догори картка йде тільки на ВИХОДІ (гілка вище), і там це доречно:
+  // вона звільняє місце наступному носію.
+  return { x, y: 0, scale: 0.97 + 0.03 * e, opacity: 1 };
 }
 
 /**
@@ -522,17 +916,85 @@ export function sceneAt(
   return null;
 }
 
+/**
+ * Проміжок між тим, як пішов один предмет, і тим, як заходить наступний.
+ * Рівно стільки, щоб вихід догорів у порожньому кадрі.
+ */
+const CARRIER_GAP_S = 0.12;
+
+/** Чи належать дві сцени одній думці (ланцюг `continues: true`). */
+function sameThought(scenes: readonly Scene[], a: number, b: number): boolean {
+  if (a === b) return true;
+  if (a < 0 || b < 0) return false;
+  const lo = Math.min(a, b);
+  const hi = Math.max(a, b);
+  for (let k = lo + 1; k <= hi; k += 1) {
+    if (scenes[k]?.continues !== true) return false;
+  }
+  return true;
+}
+
+/** Індекс сцени, у чий діапазон слів потрапляє це слово. */
+function sceneOfWord(scenes: readonly Scene[], wordIndex: number): number {
+  return scenes.findIndex((s) => wordIndex >= s.from && wordIndex <= s.to);
+}
+
+/**
+ * Життя предметів у часі.
+ *
+ * `hold` задає агент, але предмет не може дожити до приходу СЛІДУЮЧОЇ
+ * думки. Доти міг: стікер попереднього речення ще висів, коли заходив
+ * наступний, обидва потрапляли в одну розкладку і РОЗʼЇЖДЖАЛИСЯ,
+ * звільняючи місце. Задумано це було для двох предметів однієї думки, а
+ * між різними думками читалось як політ з краю в край на зламі фрази.
+ *
+ * Стеля саме «до наступного носія», а не «до кінця речення». Різниця не
+ * теоретична: за кінцем речення предмет із бейджами на 9-й і 11-й
+ * секунді помирав на 8-й, і плашки не з'являлись зовсім — мовчки, бо
+ * малюються вони всередині предмета. За приходом наступного той самий
+ * предмет живе, скільки просив, і ріжеться лише там, де інакше був би
+ * перетин.
+ *
+ * Носій — і стікер, і картка: картка теж займає ту саму смугу кадру.
+ *
+ * Одна думка (ланцюг `continues: true`) стелі не створює: там два
+ * предмети поруч — свідома схема, і розсування доречне.
+ */
 export function stickerSpans(
   stickers: readonly Sticker[],
   words: readonly WordTiming[],
+  scenes: readonly Scene[] = [],
+  cards: readonly Card[] = [],
 ): { sticker: Sticker; start: number; end: number }[] {
-  return stickers
-    .filter((s) => words[s.word] != null && s.hold > 0)
-    .map((s) => ({
-      sticker: s,
+  const alive = stickers.filter((s) => words[s.word] != null && s.hold > 0);
+
+  // Усі носії за часом появи — щоб знати, хто заходить наступним.
+  const carriers = [
+    ...alive.map((s) => ({
       start: Math.max(0, words[s.word]!.start - (s.lead ?? 0)),
-      end: words[s.word]!.start + s.hold,
-    }))
+      scene: sceneOfWord(scenes, s.word),
+    })),
+    ...cards
+      .filter((c) => words[c.word] != null && c.hold > 0)
+      .map((c) => ({ start: words[c.word]!.start, scene: sceneOfWord(scenes, c.word) })),
+  ].sort((a, b) => a.start - b.start);
+
+  return alive
+    .map((s) => {
+      const start = Math.max(0, words[s.word]!.start - (s.lead ?? 0));
+      const asked = words[s.word]!.start + s.hold;
+      if (scenes.length === 0) return { sticker: s, start, end: asked };
+
+      const mine = sceneOfWord(scenes, s.word);
+      const next = carriers.find(
+        (c) => c.start > start && !sameThought(scenes, mine, c.scene),
+      );
+      if (!next) return { sticker: s, start, end: asked };
+      // Стеля не може зробити життя коротшим за появу: інакше предмет
+      // народжується вже вмираючим.
+      const end = Math.max(start + 0.2, Math.min(asked, next.start - CARRIER_GAP_S));
+      return { sticker: s, start, end };
+    })
     .sort((a, b) => a.start - b.start);
 }
 
@@ -695,7 +1157,7 @@ const DRIFT_PHASE_S = [0, -0.5, -0.3, -0.8, -0.35];
  * інший кадр, превʼю не збігалося б із рендером, а перемотка назад
  * показувала б не те, що було секунду тому.
  */
-function prand(n: number): number {
+export function prand(n: number): number {
   const x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
   return x - Math.floor(x);
 }
@@ -709,14 +1171,37 @@ export const ENTER_S = 0.68;
  * Раніше поява жила в CSS-анімації, і через це вхід був один на всіх:
  * ані стати одразу, ані приїхати збоку вона не вміла.
  */
+/**
+ * Повний стан входу/виходу. Понад базові зсув-масштаб-прозорість —
+ * необов'язкові осі для нових ефектів: 2D-нахил, 3D-розворот навколо
+ * вертикалі, окремі масштаби по осях (сплюск) і розмиття. Відсутнє
+ * поле = нейтральне значення, старі ефекти їх не чіпають.
+ */
+export interface StickerFx {
+  x: number;
+  y: number;
+  scale: number;
+  opacity: number;
+  rot?: number;
+  ry?: number;
+  sx?: number;
+  sy?: number;
+  blur?: number;
+}
+
 export function stickerEnter(
   kind: StickerEnter | undefined,
   age: number,
-): { x: number; y: number; scale: number; opacity: number } {
+): StickerFx {
   const k = kind ?? 'pop';
   // Стоїть із першого кадру: жодного зростання, жодного проявлення.
   if (k === 'instant') return { x: 0, y: 0, scale: 1, opacity: 1 };
   const p = Math.min(Math.max(age / ENTER_S, 0), 1);
+  // Проявлення на вході: перші 35 % шляху предмет набирає щільність.
+  // Доти opacity стрибала 0→1 одним кадром — рух був, а поява ні:
+  // предмет ВИСКАКУВАВ у кадр уже щільним, і око ловило стрибок.
+  // instant лишається без фейду навмисно — його суть «уже стоїть».
+  const fadeIn = smooth(Math.min(p / 0.35, 1));
   if (k === 'from-right' || k === 'from-left') {
     const dir = k === 'from-right' ? 1 : -1;
     // Проскакує ціль на 10 % ширини і повертається: предмет, що
@@ -724,7 +1209,7 @@ export function stickerEnter(
     const x = p < 0.62
       ? dir * (2.2 - 2.42 * easeOut(p / 0.62))
       : dir * (-0.22 + 0.22 * smooth((p - 0.62) / 0.38));
-    return { x, y: 0, scale: 1, opacity: 1 };
+    return { x, y: 0, scale: 1, opacity: fadeIn };
   }
   if (k === 'from-bottom') {
     // Підйом із-під нижнього краю зони, з тим самим проскоком, що й у
@@ -733,15 +1218,150 @@ export function stickerEnter(
     const y = p < 0.62
       ? 1.6 - 1.78 * easeOut(p / 0.62)
       : -0.18 + 0.18 * smooth((p - 0.62) / 0.38);
-    return { x: 0, y, scale: 1, opacity: 1 };
+    return { x: 0, y, scale: 1, opacity: fadeIn };
+  }
+  if (k === 'flip') {
+    // Розворот із ребра: предмет стояв боком (90°) і розвертається до
+    // глядача з перельотом на −10° — зупинка рівно в нуль читається як
+    // механічна. Щільність набирає швидше за інших: ребро й так тонке.
+    const ry = p < 0.7
+      ? 90 - 100 * easeOut(p / 0.7)
+      : -10 + 10 * smooth((p - 0.7) / 0.3);
+    return { x: 0, y: 0, scale: 1, opacity: smooth(Math.min(p / 0.25, 1)), ry };
+  }
+  if (k === 'drop') {
+    // Падіння згори: розгін (квадрат — вільне падіння), удар зі
+    // сплюском по вертикалі й розширенням по горизонталі, короткий
+    // відскок. Сплюск — у вузькому вікні контакту, не розмазаний.
+    const y = p < 0.5
+      ? -1.35 * (1 - (p / 0.5) ** 2)
+      : p < 0.75
+        ? -0.2 * Math.sin(Math.PI * ((p - 0.5) / 0.25))
+        : 0;
+    const contact = p >= 0.48 && p < 0.64
+      ? Math.sin(Math.PI * ((p - 0.48) / 0.16))
+      : 0;
+    return {
+      x: 0, y, scale: 1, opacity: fadeIn,
+      sy: 1 - 0.18 * contact,
+      sx: 1 + 0.1 * contact,
+    };
+  }
+  if (k === 'stamp') {
+    // Печатка: завеликий і напівпрозорий притискається в своє місце,
+    // в кінці — короткий дотиск нижче одиниці й повернення. Щільність
+    // приходить із притиском: штамп «проявляється» від контакту.
+    const scale = p < 0.55
+      ? 1.6 - 0.6 * easeOut(p / 0.55)
+      : p < 0.8
+        ? 1 - 0.04 * Math.sin(Math.PI * ((p - 0.55) / 0.25))
+        : 1;
+    return { x: 0, y: 0, scale, opacity: smooth(Math.min(p / 0.45, 1)) };
+  }
+  if (k === 'spin') {
+    // Виріст із довертанням: нахил −16° розкручується з перельотом на
+    // +3° і сідає в нуль. Це вхід, а не «обертання як подія» — кут
+    // малий і живе лише всередині появи.
+    const rot = p < 0.75
+      ? -16 + 19 * easeOut(p / 0.75)
+      : 3 - 3 * smooth((p - 0.75) / 0.25);
+    const scale = 0.5 + 0.5 * smooth(Math.min(p / 0.8, 1));
+    return { x: 0, y: 0, scale, opacity: fadeIn, rot };
   }
   const scale = p < 0.68
     ? 0.8 + 0.26 * smooth(p / 0.68)
     : 1.06 - 0.06 * smooth((p - 0.68) / 0.32);
-  return { x: 0, y: 0, scale, opacity: 1 };
+  return { x: 0, y: 0, scale, opacity: fadeIn };
+}
+
+/**
+ * Вихід стікера — чиста функція прогресу 0…1 за останні
+ * STICKER_EXIT_LEAD_S секунд життя. Повертає МНОЖНИКИ й ДОБАВКИ до
+ * стану входу: рендер комбінує вхід·вихід, тому обірваний вхід і
+ * ранній вихід складаються без стрибків.
+ *
+ * `shrink` — історичний вихід «сів і згас» (був єдиним і зашитим).
+ */
+export function stickerExit(
+  kind: StickerExit | undefined,
+  outP: number,
+): { x: number; y: number; scaleMul: number; opacity: number; rot: number; ry: number; sx: number; sy: number; blur: number } {
+  const o = Math.min(Math.max(outP, 0), 1);
+  const none = { x: 0, y: 0, scaleMul: 1, opacity: 1, rot: 0, ry: 0, sx: 1, sy: 1, blur: 0 };
+  if (o <= 0) return none;
+  const k = kind ?? 'shrink';
+  if (k === 'flip-out') {
+    // Дзеркалить flip-вхід: розворот на ребро в ІНШИЙ бік. Гасне лише
+    // в кінці — ребро тонке, і фейд поверх нього подвоював би зникання.
+    return {
+      ...none,
+      ry: -90 * smooth(o),
+      opacity: 1 - smooth(Math.max(0, (o - 0.35) / 0.65)),
+    };
+  }
+  if (k === 'drop-out') {
+    // Зривається вниз, як упущений: розгін квадратом, легкий нахил у
+    // падінні. Прозорість тримається — предмет ПАДАЄ, а не тане.
+    return {
+      ...none,
+      y: 1.5 * o * o,
+      rot: 9 * o,
+      opacity: 1 - smooth(Math.max(0, (o - 0.4) / 0.6)),
+    };
+  }
+  if (k === 'whoosh-up') {
+    // Вилітає вгору, стискаючись по горизонталі — слід від швидкості.
+    return {
+      ...none,
+      y: -1.7 * o * o * o,
+      sx: 1 - 0.28 * o,
+      opacity: 1 - smooth(Math.max(0, (o - 0.5) / 0.5)),
+    };
+  }
+  if (k === 'dissolve') {
+    // Розчинення: трохи виростає, розмивається і тане. Єдиний вихід,
+    // де предмет НЕ рухається — тому й читається як спогад, а не дія.
+    return {
+      ...none,
+      scaleMul: 1 + 0.1 * o,
+      blur: 7 * o,
+      opacity: 1 - smooth(o),
+    };
+  }
+  // shrink: ті самі числа, що жили інлайново в рендері (−12 % масштабу
+  // через punch). Перенесено сюди, щоб вихід мав одне джерело правди.
+  return { ...none, scaleMul: 1 - 0.12 * o, opacity: 1 - o };
 }
 
 /** Скільки бейджів тримаємо над стікером. Більше — стовп замість акценту. */
+/**
+ * Скільки місця над стікером резервується під бейдж.
+ *
+ * Заміряно на готовому ролику: плашка займає 84 px висоти плюс ~20 px
+ * проміжку до картинки. Без цього запасу предмет із бейджем займав усю
+ * зону цілком, а плашка виїжджала над нею — у ролику вона опинялась на
+ * 132 px від верху при безпечних 250, тобто рівно під шапкою Instagram.
+ */
+export const BADGE_ROOM = 0.055;
+
+/**
+ * Висота плашки в пікселях полотна — із того самого заміру, що й
+ * `BADGE_ROOM`: кегль 4.3 cqw від 1080 (46.4 px) × 1.2 інтерліньяжу
+ * плюс поля 0.3em згори й знизу. Потрібна там, де плашку треба сховати
+ * ЗА картку: без її висоти не порахувати, наскільки з'їхати вниз.
+ */
+export const BADGE_H_PX = 84;
+
+/**
+ * Півширина плашки і поле від краю кадру — у частках ШИРИНИ кадру.
+ *
+ * Потрібні, щоб відсунути бічний бейдж від предмета й водночас не дати
+ * йому вилізти за край: у частках коробки це не рахується, бо коробка
+ * вузького предмета сама стоїть близько до краю.
+ */
+export const BADGE_HALF = 0.085;
+export const BADGE_EDGE = 0.15;
+
 export const BADGE_MAX_LIVE = 3;
 export const BADGE_IN_S = 0.42;
 /** Скільки бейдж висить, перш ніж піти. */
@@ -755,11 +1375,13 @@ export const BADGE_OUT_S = 0.5;
  * Накопичення тут головне: «−10 хв» один раз це факт, три поспіль — це
  * вже відчуття втрати. Тому старий не зникає, коли приходить новий.
  */
+export const BADGE_SHIFT_S = 0.28;
+
 export function liveBadges(
   badges: readonly StickerBadge[] | undefined,
   words: readonly WordTiming[],
   t: number,
-): { badge: StickerBadge; age: number; rank: number }[] {
+): { badge: StickerBadge; age: number; rank: number; rankSmooth: number }[] {
   if (!badges?.length) return [];
   const live = badges
     .map((b) => ({ badge: b, age: t - (words[b.at]?.start ?? Number.POSITIVE_INFINITY) }))
@@ -768,7 +1390,21 @@ export function liveBadges(
   // Ранг рахується від НАЙНОВІШОГО: він стає просто над предметом, а
   // попередні виштовхуються вище й тануть. Конвеєр читається як «ось
   // що відбувається зараз», а стовп однакових плашок — як список.
-  return live.map((x, i) => ({ ...x, rank: live.length - 1 - i }));
+  /*
+   * Ранг ПЛАВНИЙ. Раніше поява нового бейджа миттєво зсувала ранг усіх
+   * попередніх — і вони телепортувались через кадр. Тепер, поки
+   * найновіший молодший за BADGE_SHIFT_S, старі стоять між своїм
+   * попереднім і новим місцем: та сама чиста функція часу, тільки без
+   * стрибка.
+   */
+  const newestAge = live[live.length - 1]?.age ?? Number.POSITIVE_INFINITY;
+  const shift = smooth(Math.min(Math.max(newestAge / BADGE_SHIFT_S, 0), 1));
+  return live.map((x, i) => {
+    const rank = live.length - 1 - i;
+    // Найновіший уже на своєму місці; решта доїжджають зі старого рангу.
+    const rankSmooth = rank === 0 ? 0 : rank - 1 + shift;
+    return { ...x, rank, rankSmooth };
+  });
 }
 
 /**
@@ -805,6 +1441,41 @@ export function badgePop(age: number): {
     lift: (1 - e) * 1.6,
     rot: (1 - e) * -9,
   };
+}
+
+/**
+ * Те саме, але для плашки на картці колекційного: вона і приходить, і
+ * йде ЗА КАРТКУ, тобто вниз.
+ *
+ * Чому не `badgePop`. Там плашка відлітає ВГОРУ, звільняючи кадр — це
+ * правильно, коли під нею предмет із прозорими полями. На картці ж
+ * угорі безпечна лінія Instagram, а сама плашка ширша за картку, і
+ * будь-який виліт убік або вгору лишає її просто висіти в порожньому
+ * полі. Картка ж — суцільний непрозорий блок, і за нього плашка
+ * ховається природно: вийшла з-за верхнього краю, сказала своє, пішла
+ * назад.
+ *
+ * Розвороту немає навмисно: плашка виїжджає з-за краю, а не прилітає
+ * здалеку, і перекіс читався б як зачеплення.
+ */
+export function badgePopSlide(age: number): {
+  opacity: number;
+  scale: number;
+  lift: number;
+  rot: number;
+} {
+  if (age >= BADGE_HOLD_S) {
+    const gone = smooth(Math.min((age - BADGE_HOLD_S) / BADGE_OUT_S, 1));
+    return { opacity: 1 - gone, scale: 1 - 0.04 * gone, lift: gone, rot: 0 };
+  }
+  const p = Math.min(Math.max(age / BADGE_IN_S, 0), 1);
+  const e = smooth(p);
+  // Коротке проявлення на старті. Плашка ширша за картку (376–580 px
+  // проти 352), тож навіть цілком «схована» вона світить плечима з-за
+  // країв — і без цього вони спалахували б одним кадром. За 30 % входу
+  // (0.13 с) непрозорість уже повна, тож виїзд лишається виїздом, а не
+  // стає проявленням.
+  return { opacity: Math.min(1, p / 0.3), scale: 0.96 + 0.04 * e, lift: 1 - e, rot: 0 };
 }
 
 export const LABEL_DELAY_S = 0.16;
@@ -966,7 +1637,17 @@ export interface Finding {
 /** Найменший помітний проміжок між двома появами. */
 export const MIN_GAP_S = 0.25;
 /** Довша порожнеча між носіями вже читається як провал. */
-export const MAX_HOLE_S = 0.15;
+/**
+ * Дірка між носіями, з якої починається «провал», а не «вдих».
+ *
+ * Було 0.15 — і поріг воював із власним каноном: словник рухів радить
+ * щілину 0.2–0.35 с між думками (попередній догорів, кадр дихнув,
+ * новий зайшов), а перевірка позначала кожну таку щілину як дірку.
+ * На ролику з сімома носіями це давало сім однакових хибних warn, у
+ * яких тонули справжні провали. Пів секунди — межа, за якою порожнеча
+ * вже помітна оку навіть на швидкості 1.3×.
+ */
+export const MAX_HOLE_S = 0.5;
 /** Довший простій без жодної події читається як зависла картинка. */
 export const MAX_STILL_S = 4;
 /** Більше живих елементів у кадрі не читається. */
@@ -997,6 +1678,11 @@ export function checkPost(
    * на «простій» та «наголос без події» там, де насправді виїжджають рядки.
    */
   cardSteps: Readonly<Record<string, readonly CardStep[]>> = {},
+  /**
+   * Id-и словника рухів (assets/motions.json). Порожньо — перевірка
+   * бюджету мовчить: без словника звіряти вибір нема з чим.
+   */
+  motionIds: readonly string[] = [],
 ): Finding[] {
   const out: Finding[] = [];
   const w = post.words;
@@ -1006,17 +1692,28 @@ export function checkPost(
   const stickers = post.stickers ?? [];
   const cards = post.cards ?? [];
 
+  /*
+   * Межі беремо з `stickerSpans` — того самого джерела, що малює кадр.
+   *
+   * Доти перевірка рахувала життя як `слово + hold` і збігалася з
+   * рендером посимвольно. Щойно рендер дістав стелю «до наступного
+   * носія», перевірка лишилась єдиним місцем зі старим правилом — і
+   * почала бути сліпою рівно до тих наслідків, які стеля й породжує:
+   * бейдж, що народжується після смерті свого предмета, у кадр не
+   * потрапляє зовсім, а панель показувала «0 треба поправити».
+   */
+  const realSpans = stickerSpans(stickers, w, post.scenes ?? [], cards);
+  const endOf = new Map(realSpans.map((s) => [s.sticker, s.end]));
+
   // Носії кадру — стікери й картки. Картка витісняє стікери, тому для
   // порожнеч і простою вони йдуть одним списком.
   const spans = [
-    ...stickers
-      .filter((s) => w[s.word] != null)
-      .map((s) => ({
-        id: s.id,
-        start: Math.max(0, at(s.word) - (s.lead ?? 0)),
-        end: at(s.word) + s.hold,
-        exit: STICKER_EXIT_LEAD_S,
-      })),
+    ...realSpans.map((s) => ({
+      id: s.sticker.id,
+      start: s.start,
+      end: s.end,
+      exit: STICKER_EXIT_LEAD_S,
+    })),
     ...cards
       .filter((c) => w[c.word] != null)
       .map((c) => ({ id: c.id, start: at(c.word), end: at(c.word) + c.hold, exit: CARD_OUT_S })),
@@ -1027,7 +1724,19 @@ export function checkPost(
   for (const s of stickers) {
     if (w[s.word] == null) continue;
     const start = at(s.word);
-    const end = start + s.hold;
+    const end = endOf.get(s) ?? start + s.hold;
+    const asked = start + s.hold;
+    // Предмет обрізано приходом наступної думки — скажи це прямо, бо
+    // саме тут ховаються бейджі, яких у кадрі не буде.
+    if (end < asked - 0.05) {
+      out.push({
+        at: end,
+        level: 'info',
+        what: `${s.id} живе до ${end.toFixed(1)} с замість ${asked.toFixed(1)}`,
+        why: 'далі заходить наступна думка. Тримати довше — поставити '
+          + 'наступним сценам continues: true',
+      });
+    }
     if (s.label) {
       const shown = end - STICKER_EXIT_LEAD_S - (start + LABEL_DELAY_S);
       const need = readTime(s.label);
@@ -1043,6 +1752,18 @@ export function checkPost(
     for (const b of s.badges ?? []) {
       if (w[b.at] == null) continue;
       const born = at(b.at);
+      // Бейдж малюється ВСЕРЕДИНІ предмета: пішов предмет — плашки нема
+      // взагалі. Це не «мало часу», це «не існує», і сказати треба інакше.
+      if (born >= end) {
+        out.push({
+          at: born,
+          level: 'warn',
+          what: `бейдж «${b.text}» у кадр не потрапляє`,
+          why: `${s.id} живе до ${end.toFixed(1)} с, а плашка виходить на ${born.toFixed(1)} — `
+            + 'перенести її раніше, повісити на інший предмет або продовжити думку через continues',
+        });
+        continue;
+      }
       const shown = Math.min(BADGE_HOLD_S, end - STICKER_EXIT_LEAD_S - born);
       const need = readTime(b.text);
       if (shown < need) {
@@ -1156,5 +1877,366 @@ export function checkPost(
     }
   }
 
+  /*
+   * 7. ГЕОМЕТРІЯ КАДРУ.
+   *
+   * Доти перевірка дивилась лише на ЧАС: скільки що живе, чи встигає
+   * прочитатись, чи не порожньо. Увесь клас «стоїть не там» лишався
+   * людському оку — і саме він зʼїв 16.08: подарунок на 33 px лівіше
+   * власного слота, бейдж поверх картки, пара «подарунок + картка», що
+   * розʼїжджається на пів секунди, картка, що дугою заходить у кадр.
+   * На кожному з них перевірка казала «0 знахідок», а знаходив власник
+   * очима, по одному за повідомлення.
+   *
+   * Числа тут — ті самі, якими кадр малюється (`NFT_CARD_SLOT`, зона
+   * стікерів пресета, смуга субтитрів), тому це не «на око», а звірка
+   * даних із геометрією.
+   */
+  const preset = PRESETS[post.preset] ?? PRESETS[DEFAULT_PRESET];
+  const nftCards = cards
+    .filter((c) => w[c.word] != null && c.hold > 0 && isNftCard(c.file))
+    .map((c) => ({ card: c, start: at(c.word), end: at(c.word) + c.hold }));
+
+  for (const nc of nftCards) {
+    // Предмети, що перетинаються з карткою в часі: студія ставить у
+    // слот КОЖЕН живий предмет, поки картка в кадрі.
+    const inside = realSpans.filter((s) => s.start < nc.end && s.end > nc.start);
+
+    if (inside.length === 0) {
+      out.push({
+        at: nc.start,
+        level: 'warn',
+        what: `картка «${nc.card.id}» стоїть із порожнім слотом`,
+        why: 'у картці колекційного слот — головне місце; без предмета вона читається як недомальована',
+      });
+    }
+    if (inside.length > 1) {
+      out.push({
+        at: nc.start,
+        level: 'warn',
+        what: `у слот картки «${nc.card.id}» цілять ${inside.length} предмети`,
+        why: `${inside.map((s) => s.sticker.id).join(', ')} — слот один, вони стануть один на одного`,
+      });
+    }
+    for (const s of inside) {
+      // Пара живе одним відрізком, і це не смак: слот — фізичне
+      // вміщення. Розбіжність на вході дає пів секунди, коли предмет
+      // стоїть вільним стікером, а тоді стрибає в картку; на виході —
+      // картку з порожнім слотом.
+      const dS = s.start - nc.start;
+      const dE = s.end - nc.end;
+      if (Math.abs(dS) > 0.05 || Math.abs(dE) > 0.05) {
+        out.push({
+          at: Math.min(s.start, nc.start),
+          level: 'warn',
+          what: `«${s.sticker.id}» і картка «${nc.card.id}» живуть різними відрізками`,
+          why: `предмет ${s.start.toFixed(2)}–${s.end.toFixed(2)}, картка ${nc.start.toFixed(2)}–${nc.end.toFixed(2)}`
+            + `${Math.abs(dS) > 0.05 ? ` · на вході ${Math.abs(dS).toFixed(2)} с предмет сам, потім стрибає в слот` : ''}`
+            + `${Math.abs(dE) > 0.05 ? ` · на виході ${Math.abs(dE).toFixed(2)} с слот порожній` : ''}`
+            + ' — у слоті вони одна річ, постав картці те саме слово й hold',
+        });
+      }
+    }
+
+    // Плашки предмета в слоті йдуть конвеєром: нова виходить з-за
+    // картки, попередня ТУДИ Ж ховається. Тому «не встиг прочитати» тут
+    // жорсткіше, ніж у стікера: там попередня від'їжджала вбік і ще
+    // читалась, тут вона зникає.
+    for (const s of inside) {
+      const bs = (s.sticker.badges ?? [])
+        .filter((b) => w[b.at] != null)
+        .sort((a, b) => at(a.at) - at(b.at));
+      for (let i = 0; i + 1 < bs.length; i += 1) {
+        const shown = at(bs[i + 1]!.at) - at(bs[i]!.at);
+        const need = readTime(bs[i]!.text);
+        if (shown < need) {
+          out.push({
+            at: at(bs[i]!.at),
+            level: 'warn',
+            what: `плашку «${bs[i]!.text}» ховає наступна за ${shown.toFixed(1)} с`,
+            why: `на прочитання треба ${need.toFixed(1)} с — на картці попередня не від'їжджає вбік, а йде за неї`,
+          });
+        }
+      }
+    }
+  }
+
+  // Інваріанти самої картки: вони не залежать від ролика, але саме тут
+  // їх видно тому, хто крутить `dropPx`. Мовчазна поломка інакше
+  // виявляється аж на готовому mp4.
+  if (nftCards.length > 0) {
+    const zoneTop = preset.stickers.top * CANVAS.h;
+    const cardTop = zoneTop + NFT_CARD_SLOT.dropPx + NFT_CARD_SLOT.cardTopPx;
+    const cardBottom = cardTop + NFT_CARD_SLOT.cardHeightPx;
+    const bandTop = preset.captions.top * CANVAS.h;
+    const badgeTop = cardTop - NFT_CARD_SLOT.badgeGapPx - BADGE_H_PX;
+    const first = nftCards[0]!.start;
+    if (cardBottom > bandTop) {
+      out.push({
+        at: first,
+        level: 'warn',
+        what: `низ картки на ${Math.round(cardBottom)} px заходить у смугу субтитрів (${Math.round(bandTop)})`,
+        why: `зменш NFT_CARD_SLOT.dropPx на ${Math.ceil(cardBottom - bandTop)} px`,
+      });
+    }
+    if (badgeTop < IG_SAFE_TOP_PX) {
+      out.push({
+        at: first,
+        level: 'warn',
+        what: `верх плашки на ${Math.round(badgeTop)} px — вище безпечної лінії Instagram (${IG_SAFE_TOP_PX})`,
+        why: `її перекриє шапка; збільш NFT_CARD_SLOT.dropPx на ${Math.ceil(IG_SAFE_TOP_PX - badgeTop)} px`,
+      });
+    }
+  }
+
+  // Плашка, ширша за кадр, обрізається з обох боків — і читається не
+  // текст, а його середина.
+  for (const s of stickers) {
+    for (const b of s.badges ?? []) {
+      const px = badgeWidthPx(b.text);
+      if (px > CANVAS.w * 0.9) {
+        out.push({
+          at: w[b.at]?.start ?? 0,
+          level: 'warn',
+          what: `плашка «${b.text}» ширша за кадр (≈${Math.round(px)} px)`,
+          why: `стеля ≈${Math.round(CANVAS.w * 0.9)} px — скороти текст приблизно до ${Math.floor((CANVAS.w * 0.9 - 2 * 0.75 * 0.043 * CANVAS.w) / (0.55 * 0.043 * CANVAS.w))} знаків`,
+        });
+      }
+    }
+  }
+
+  /*
+   * Бюджет ролика — квоти зі словника рухів (motion-library.md).
+   *
+   * Читається із ЗАПИСАНОГО вибору: scenes[].plan.motion несе id руху,
+   * взятого за основу. Правила бюджету доти жили лише прозою в
+   * довіднику — і рівно ті помилки, проти яких вони писались (шість
+   * однакових кадрів підряд, два гаки, кільце з чужим предметом),
+   * перевірка не бачила.
+   */
+  const scenes = post.scenes ?? [];
+  if (motionIds.length > 0 && scenes.length > 0) {
+    const known = new Set(motionIds);
+    const chosen = scenes.map((sc) => {
+      const m = sc.plan?.motion;
+      return m != null && known.has(m) ? m : null;
+    });
+    const named = chosen.filter((m): m is string => m != null);
+
+    const sceneStart = (i: number): number => at(scenes[i]!.from);
+    const sceneText = (i: number): string =>
+      w.slice(scenes[i]!.from, scenes[i]!.to + 1).map((x) => x.word).join(' ');
+
+    if (named.length === 0) {
+      // Старий ролик або розбір без словника — одна знахідка, не спам
+      // на кожну сцену.
+      out.push({
+        at: 0,
+        level: 'info',
+        what: 'розбір не посилається на словник рухів',
+        why: 'постав scenes[].plan.motion = id запису — тоді бюджет ролика перевіряється, а не тримається на оці',
+      });
+    } else {
+      chosen.forEach((m, i) => {
+        if (m == null && scenes[i]!.plan?.motion != null) {
+          out.push({
+            at: sceneStart(i),
+            level: 'info',
+            what: `сцена ${i + 1}: рух «${scenes[i]!.plan!.motion}» не зі словника`,
+            why: 'або одрук в id, або новий рух, який ще не повернули в motions.json',
+          });
+        }
+      });
+
+      // Гак: рівно один, і лише на першій сцені.
+      const hooks = chosen
+        .map((m, i) => (m === 'hook-solo-lead' ? i : -1))
+        .filter((i) => i >= 0);
+      for (const i of hooks) {
+        if (i !== 0) {
+          out.push({
+            at: sceneStart(i),
+            level: 'warn',
+            what: `сцена ${i + 1}: гак посеред ролика`,
+            why: 'hook-solo-lead — це перші секунди; далі той самий кадр робить solo-one-sentence',
+          });
+        }
+      }
+
+      // Кільце: щонайбільше одне, на фіналі, і повертає предмет гака.
+      const rings = chosen
+        .map((m, i) => (m === 'ring-return' ? i : -1))
+        .filter((i) => i >= 0);
+      const stickerOfScene = (i: number): string | null => {
+        const sc = scenes[i]!;
+        const first = stickers.find((st) => st.word >= sc.from && st.word <= sc.to);
+        return first?.id ?? null;
+      };
+      for (const i of rings) {
+        if (i !== scenes.length - 1) {
+          out.push({
+            at: sceneStart(i),
+            level: 'warn',
+            what: `сцена ${i + 1}: кільце не на фіналі`,
+            why: 'ring-return замикає ролик — посеред нього повернення читається як повтор',
+          });
+        }
+        const opener = stickerOfScene(0);
+        const closer = stickerOfScene(i);
+        if (opener != null && closer != null && opener !== closer) {
+          out.push({
+            at: sceneStart(i),
+            level: 'warn',
+            what: `кільце повертає «${closer}», а ролик відкривав «${opener}»`,
+            why: 'кільце працює лише тим самим предметом: інший id — це не повернення мотиву, а новий предмет на фіналі',
+          });
+        }
+      }
+
+      // Пауза — лише на питанні або на фіналі.
+      chosen.forEach((m, i) => {
+        if (m !== 'empty-face') return;
+        const isFinal = i === scenes.length - 1;
+        const isQuestion = /\?\s*$/.test(sceneText(i));
+        if (!isFinal && !isQuestion) {
+          out.push({
+            at: sceneStart(i),
+            level: 'info',
+            what: `сцена ${i + 1}: пауза не на питанні й не на фіналі`,
+            why: 'порожній кадр працює там, де глядач думає; деінде читається як недороблено',
+          });
+        }
+      });
+    }
+
+    // Носії трьох сцен підряд одного типу — карусель або презентація.
+    // Рахуємо за фактом (стікери й картки), а не за motion: правило
+    // мусить ловити й ролики без записаного вибору.
+    const sceneKind = scenes.map((sc) => {
+      if (cards.some((c) => c.word >= sc.from && c.word <= sc.to)) return 'card';
+      if (stickers.some((st) => st.word >= sc.from && st.word <= sc.to)) return 'sticker';
+      return null;
+    });
+    let runKind: string | null = null;
+    let runLen = 0;
+    let runStart = 0;
+    sceneKind.forEach((k, i) => {
+      if (k == null) return;
+      if (k === runKind) {
+        runLen += 1;
+      } else {
+        runKind = k;
+        runLen = 1;
+        runStart = i;
+      }
+      if (runLen === 3) {
+        out.push({
+          at: sceneStart(runStart),
+          level: 'warn',
+          what: `сцени ${runStart + 1}–${i + 1}: три ${k === 'card' ? 'картки' : 'стікерні носії'} підряд`,
+          why: k === 'card'
+            ? 'три картки поспіль — презентація, а не ролик: між ними потрібен предмет або пауза'
+            : 'три нові предмети поспіль — карусель наліпок: потримай один через continues або дай картку',
+        });
+      }
+    });
+
+    // Карток забагато — теж «презентація», незалежно від порядку.
+    if (cards.length > 4) {
+      out.push({
+        at: at(cards[4]!.word),
+        level: 'warn',
+        what: `карток ${cards.length} — стеля бюджету 4`,
+        why: 'бюджет ролика на ~16 речень: 2–4 картки; більше — глядач читає, а не дивиться',
+      });
+    }
+  }
+
   return out.sort((a, b) => a.at - b.at);
+}
+
+/* ------------------------------------------------------------------ */
+/* Словник рухів (конструктор анімацій)                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Демо руху — мініролик на кілька секунд, який студія програє в кадрі
+ * по колу. Це підмножина PostSpec: той самий формат words/scenes/
+ * stickers/cards/beats, тому кадр малює його тим самим кодом, що й
+ * справжній ролик — прев'ю не «схоже» на рух, а і є ним.
+ */
+export interface MotionDemo {
+  /** Довжина петлі, секунди. */
+  duration: number;
+  words: WordTiming[];
+  scenes?: Scene[];
+  stickers?: Sticker[];
+  cards?: Card[];
+  beats?: Beat[];
+}
+
+/**
+ * Запис словника рухів — assets/motions.json.
+ *
+ * Прозова частина (enter/inside/exit/axes/fixed) дублює
+ * references/motion-library.md коротким рядком: панель показує її біля
+ * прев'ю, а повний текст із причинами лишається в довіднику. Ключі
+ * записів мають збігатися з довідником — це перевіряється очима під час
+ * правки, тож нових id поза довідником не заводити.
+ */
+/** Групи галереї — за складом кадру, як їх бачить власник. */
+export const MOTION_GROUPS = [
+  { key: 'viewer', label: 'Глядач' },
+  { key: 'solo', label: 'Один предмет' },
+  { key: 'cards', label: 'Картки' },
+  { key: 'pause', label: 'Пауза' },
+] as const;
+
+export type MotionGroup = (typeof MOTION_GROUPS)[number]['key'];
+
+export interface MotionEntry {
+  id: string;
+  title: string;
+  /** Група в галереї. Немає — потрапляє в кінець, у «без групи». */
+  group?: MotionGroup;
+  /** Питання-дискримінатор із таблиці добору: «Перше речення ролика?» */
+  pick?: string;
+  /** Склад кадру: «1 стікер · пігулка · 1–2 бейджі». */
+  shape?: string;
+  enter?: string;
+  inside?: string;
+  exit?: string;
+  /** Що агент зобов'язаний змінити під своє речення. */
+  axes?: string[];
+  /** Що не чіпати — з причиною. */
+  fixed?: string[];
+  /** Коли цей запис не брати. */
+  avoid?: string;
+  /**
+   * Живі приклади: назва ролика (id проєкту) і речення, де рух уже
+   * спрацював. Агент, що сумнівається в числах, іде в той post.json.
+   */
+  from?: string[];
+  /** Немає демо — панель показує лише опис. */
+  demo?: MotionDemo | null;
+}
+
+/**
+ * Розгорнути демо в повний PostSpec, щоб кадр малював його звичайним
+ * шляхом. Аудіо немає навмисно: час веде не доріжка, а петля прев'ю.
+ */
+export function demoPost(demo: MotionDemo): PostSpec {
+  return {
+    version: 1,
+    title: 'demo',
+    preset: DEFAULT_PRESET,
+    audio: null,
+    script: '',
+    words: demo.words,
+    beats: demo.beats ?? [],
+    scenes: demo.scenes ?? [],
+    stickers: demo.stickers ?? [],
+    cards: demo.cards ?? [],
+    speed: 1,
+  };
 }

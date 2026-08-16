@@ -7539,6 +7539,11 @@ export function ProjectView({
   const splitLeftPanelWidth = leftInspectorActive
     ? COMMENT_INSPECTOR_PANEL_WIDTH
     : chatPanelWidthRef.current;
+  // Ознака та сама, за якою вмикається пост-студія: kind у метаданих або
+  // просто наявність post.json — проєкти, заведені до появи kind, теж
+  // мають відкриватись роликом, а не файловим деревом.
+  const isVideoProject = currentProject.metadata?.kind === 'video'
+    || projectFiles.some((f) => f.name === 'post.json');
   const chatPanelAriaMinWidth = Math.min(MIN_CHAT_PANEL_WIDTH, chatPanelMaxWidth);
   const projectActionsToastInChatPane =
     projectActionsToast?.scope === 'chat-pane' &&
@@ -8516,6 +8521,7 @@ export function ProjectView({
           projectSplitClassName(workspaceFocused),
           leftInspectorActive && !workspaceFocused ? 'split-manual-edit' : '',
           resizingChatPanel && !workspaceFocused ? 'is-resizing-chat' : '',
+          isVideoProject ? 'split-video' : '',
         ].filter(Boolean).join(' ')}
         style={projectSplitStyle(workspaceFocused, splitLeftPanelWidth, workspacePanelTrack)}
       >

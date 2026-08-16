@@ -2065,17 +2065,30 @@ function AppInner() {
     navigate({ kind: 'project', projectId, fileName: liveArtifactTabId(artifactId) });
   }, []);
 
+  // Куди повертатись, вийшовши з проєкту. Ролики живуть на власній
+  // вкладці, і викидати з них на загальну домівку — значить щоразу
+  // шукати список заново. Решта проєктів як була, так і лишається.
+  const homeViewForProject = useCallback((id: string | null): 'home' | 'reels' => {
+    if (!id) return 'home';
+    const project = projects.find((p) => p.id === id);
+    return project?.metadata?.kind === 'video' ? 'reels' : 'home';
+  }, [projects]);
+
   const handleDeleteProject = useCallback(async (id: string) => {
     const ok = await deleteProjectApi(id);
     if (!ok) return false;
+    // Куди вертатись — питаємо ДО того, як проєкт зникне зі списку:
+    // після setProjects його метаданих уже нема, і будь-який ролик
+    // виглядав би як звичайний проєкт.
+    const back = homeViewForProject(id);
     clearLocalProject(id, { deleted: true });
     iframeKeepAlivePool.evictProject(id, { includeActive: true });
     setProjects((curr) => curr.filter((p) => p.id !== id));
     if (route.kind === 'project' && route.projectId === id) {
-      navigate({ kind: 'home', view: 'home' });
+      navigate({ kind: 'home', view: back });
     }
     return true;
-  }, [clearLocalProject, iframeKeepAlivePool, route]);
+  }, [clearLocalProject, homeViewForProject, iframeKeepAlivePool, route]);
 
   const handleRenameProject = useCallback(async (id: string, name: string) => {
     const trimmed = name.trim();
@@ -2091,13 +2104,13 @@ function AppInner() {
   // can leave an in-app history entry that points back to the same project.
   const handleBack = useCallback(() => {
     const currentProjectId = route.kind === 'project' ? route.projectId : null;
-    navigate({ kind: 'home', view: 'home' });
+    navigate({ kind: 'home', view: homeViewForProject(currentProjectId) });
     if (currentProjectId && typeof window !== 'undefined') {
       window.setTimeout(() => {
         iframeKeepAlivePool.evictProject(currentProjectId, { includeActive: true });
       }, 0);
     }
-  }, [iframeKeepAlivePool, route]);
+  }, [homeViewForProject, iframeKeepAlivePool, route]);
 
   const handleClearPendingPrompt = useCallback(() => {
     const projectId = route.kind === 'project' ? route.projectId : null;

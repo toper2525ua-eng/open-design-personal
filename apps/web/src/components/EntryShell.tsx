@@ -1261,6 +1261,7 @@ export function EntryShell({
                 projects={projects}
                 loading={projectsLoading}
                 onOpenProject={onOpenProject}
+                onDelete={onDeleteProject}
                 onCreate={() => {
                   // Створюємо напряму, без модалки вибору типу: сюди
                   // приходять робити рілс, тип уже відомий. kind:'video'
@@ -1268,6 +1269,16 @@ export function EntryShell({
                   void Promise.resolve(
                     onCreateProject({
                       name: 'Новий ролик',
+                      // Без плагіна агент у чаті не отримує SKILL.md: він
+                      // приходить у системний промпт тільки через
+                      // прив'язаний знімок плагіна. Ролики створювались
+                      // без нього, і агент щоразу працював без правил —
+                      // писав розбір у файл замість post.json, не знав ні
+                      // формату даних, ні того, що озвучка приходить
+                      // руками. Саме `pluginId`, а не `skillId`: скіл тут
+                      // не зареєстрований глобально, він живе всередині
+                      // плагіна.
+                      pluginId: 'create-instagram-post',
                       skillId: null,
                       designSystemId: null,
                       metadata: { kind: 'video' },
