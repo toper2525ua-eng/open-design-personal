@@ -360,6 +360,29 @@ describe('checkPost — геометрія', () => {
     expect(geom(f, 'порожнім слотом')).toBe(false);
   });
 
+  it('ловить предмет, id якого не існує', () => {
+    // Рівно ролик про NFT: агент вписав `gift-collectible`, бо правило
+    // «впиши id подарунка» знав, а списку id не мав. У кадрі — рамка.
+    const f = checkPost({
+      ...base,
+      stickers: [{ id: 'gift-collectible', word: 0, hold: 4 }],
+    }, {}, [], ['rocket', 'you']);
+    expect(geom(f, 'немає')).toBe(true);
+  });
+
+  it('справжній id подарунка пропускає', () => {
+    // `gift-118` і модель `gift-118-v012` студія довозить сама.
+    for (const id of ['gift-118', 'gift-118-v012']) {
+      const f = checkPost({ ...base, stickers: [{ id, word: 0, hold: 4 }] }, {}, [], ['rocket']);
+      expect(geom(f, 'немає')).toBe(false);
+    }
+  });
+
+  it('id із реєстру набору не чіпає', () => {
+    const f = checkPost({ ...base, stickers: [{ id: 'rocket', word: 0, hold: 4 }] }, {}, [], ['rocket']);
+    expect(geom(f, 'немає')).toBe(false);
+  });
+
   it('ловить плашку, ширшу за кадр', () => {
     const f = checkPost({
       ...base,

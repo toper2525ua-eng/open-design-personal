@@ -17,7 +17,11 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Express } from 'express';
+import type Database from 'better-sqlite3';
 import type { RouteDeps } from '../../server-context.js';
+import { getInstalledPlugin } from '../../plugins/registry.js';
+
+type SqliteDb = Database.Database;
 
 type RenderJobState = 'running' | 'done' | 'error';
 
@@ -158,9 +162,29 @@ function readAlivePid(pidPath: string): number | null {
   }
 }
 
-// Файл плагіна (скрипт чи довідник): staged-копія проєкту має пріоритет
-// над встановленим плагіном — з нею проєкт реально працює.
-function findPluginFile(projectDir: string, runtimeDataDir: string, rel: string): string | null {
+/*
+ * Файл плагіна (скрипт чи довідник). Порядок пошуку — від найближчого
+ * до проєкту до найзагальнішого:
+ *
+ *   1. staged-копія в самому проєкті — з нею проєкт реально працює;
+ *   2. РЕЄСТР: де плагін лежить насправді (`installed_plugins.fs_path`);
+ *   3. стара локальна установка в даних — лише як хвіст сумісності.
+ *
+ * Крок 2 з'явився, коли плагін переїхав у образ застосунку. Доти
+ * резолвер знав рівно два місця, і жодне з них не вело до вкладеного:
+ * свіжий проєкт (де staged-копії ще немає) мовчки брав словник рухів зі
+ * СТАРОЇ локальної установки. У галереї це виглядало як «нові анімації
+ * не з'явились», хоча канон уже містив їх — просто ніхто його не читав.
+ *
+ * Реєстр тут єдине надійне джерело: bundled-ходок пише туди справжній
+ * шлях і в dev (тека репозиторію), і в packaged (тека всередині образу).
+ */
+function findPluginFile(
+  projectDir: string,
+  runtimeDataDir: string,
+  rel: string,
+  db?: SqliteDb,
+): string | null {
   const staged = path.join(projectDir, '.od-skills');
   try {
     for (const entry of fs.readdirSync(staged)) {
@@ -169,7 +193,18 @@ function findPluginFile(projectDir: string, runtimeDataDir: string, rel: string)
       if (fs.existsSync(candidate)) return candidate;
     }
   } catch {
-    // staged-теки немає — падаємо на встановлений плагін
+    // staged-теки немає — шукаємо далі
+  }
+  if (db) {
+    try {
+      const record = getInstalledPlugin(db, PLUGIN_ID);
+      if (record?.fsPath) {
+        const candidate = path.join(record.fsPath, rel);
+        if (fs.existsSync(candidate)) return candidate;
+      }
+    } catch {
+      // реєстр недоступний — лишається хвіст сумісності
+    }
   }
   const installed = path.join(runtimeDataDir, 'plugins', PLUGIN_ID, rel);
   return fs.existsSync(installed) ? installed : null;
@@ -401,7 +436,7 @@ export function registerProjectRenderRoutes(
         audioRel = rel;
       }
 
-      const script = findPluginFile(projectDir, RUNTIME_DATA_DIR, path.join('scripts', 'render.py'));
+      const script = findPluginFile(projectDir, RUNTIME_DATA_DIR, path.join('scripts', 'render.py'), db);
       if (!script) {
         res.status(404).json({
           error: 'render.py не знайдено — ні в .od-skills проєкту, ні у встановленому плагіні',
@@ -541,7 +576,7 @@ export function registerProjectRenderRoutes(
         return;
       }
 
-      const script = findPluginFile(projectDir, RUNTIME_DATA_DIR, path.join('scripts', 'align.py'));
+      const script = findPluginFile(projectDir, RUNTIME_DATA_DIR, path.join('scripts', 'align.py'), db);
       if (!script) {
         res.status(404).json({
           error: 'align.py не знайдено — ні в .od-skills проєкту, ні у встановленому плагіні',
@@ -867,7 +902,7 @@ export function registerProjectRenderRoutes(
       };
       const entry = catalog.items?.find((x) => x.slug === slug);
 
-      const script = findPluginFile(projectDir, RUNTIME_DATA_DIR, path.join('scripts', 'gift_sprite.py'));
+      const script = findPluginFile(projectDir, RUNTIME_DATA_DIR, path.join('scripts', 'gift_sprite.py'), db);
       if (!script) {
         res.status(404).json({ error: 'gift_sprite.py не знайдено у плагіні' });
         return;
@@ -1134,6 +1169,7 @@ export function registerProjectRenderRoutes(
         projectDir,
         RUNTIME_DATA_DIR,
         path.join('references', 'motions.json'),
+        db,
       );
       if (!motionsSrc) {
         res.status(404).json({ error: 'motions.json не знайдено у плагіні' });
@@ -1147,7 +1183,7 @@ export function registerProjectRenderRoutes(
       // Demo-картки — лише відсутні: наявні в проєкті могли правитись
       // у конструкторі, копія з канону їх не сміє перетирати.
       let cards = 0;
-      const demoDir = findPluginFile(projectDir, RUNTIME_DATA_DIR, path.join('references', 'demo-cards'));
+      const demoDir = findPluginFile(projectDir, RUNTIME_DATA_DIR, path.join('references', 'demo-cards'), db);
       if (demoDir) {
         for (const name of fs.readdirSync(demoDir)) {
           if (!name.endsWith('.html')) continue;
@@ -1158,7 +1194,36 @@ export function registerProjectRenderRoutes(
         }
       }
 
-      res.json({ ok: true, cards });
+      /*
+       * Стікери — разом зі словником, а не окремо.
+       *
+       * Вітрини рухів побудовані на предметах із набору: `fx-demo-enters`
+       * показує чотири входи на чотирьох стікерах. Студія шукає файли
+       * за проєктним шляхом `assets/stickers/…`, тож у свіжому проєкті
+       * такий запис давав порожні рамки — словник ніби заведено, а в
+       * галереї нічого не рухається.
+       *
+       * Заразом це лікує ширшу вада: без набору агент починав ролик із
+       * чистого аркуша й малював СВОЇ стікери в новій манері замість
+       * того, щоб узяти наявні.
+       *
+       * Правило те саме, що для карток: копіюємо лише відсутні.
+       */
+      let stickers = 0;
+      const stickersDir = findPluginFile(projectDir, RUNTIME_DATA_DIR, path.join('assets', 'stickers'), db);
+      if (stickersDir) {
+        const dstDir = path.join(projectDir, 'assets', 'stickers');
+        fs.mkdirSync(dstDir, { recursive: true });
+        for (const name of fs.readdirSync(stickersDir)) {
+          if (!/\.(png|json)$/i.test(name)) continue;
+          const dst = path.join(dstDir, name);
+          if (fs.existsSync(dst)) continue;
+          fs.copyFileSync(path.join(stickersDir, name), dst);
+          stickers += 1;
+        }
+      }
+
+      res.json({ ok: true, cards, stickers });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }

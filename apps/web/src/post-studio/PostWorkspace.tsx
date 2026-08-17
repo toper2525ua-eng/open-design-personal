@@ -2024,15 +2024,43 @@ export function PostWorkspace({
         },
         stale ? 'доріжку змінено, таймкоди скинуто' : `доріжка · ${clock(duration)}`,
       );
-      // Доріжка без слів — мертва: субтитрам, стікерам і рендеру нема до
-      // чого кріпитись. Тому вирівнювання стартує само; той самий файл
-      // із наявними словами не чіпаємо.
-      if ((stale || post.words.length === 0) && post.script.trim()) {
-        void startAlign(path);
-      }
+      // Вирівнювання звідси НЕ запускаємо: цим відає ефект нижче, який
+      // дивиться на СТАН ролика. Інакше автозапуск працює лише для того,
+      // хто заливає доріжку панеллю, а через чат — ні.
     },
-    [post, projectId, save, startAlign],
+    [post, projectId, save],
   );
+
+  /*
+   * Таймкоди стартують САМІ — хто б не залив доріжку.
+   *
+   * Доти автозапуск жив усередині `pickAudio`, тобто спрацьовував лише
+   * тоді, коли mp3 чіпляли ПАНЕЛЛЮ. Але доріжку так само пише агент,
+   * коли її кидають у чат — SKILL велить йому записати `audio` просто в
+   * `post.json`. Той шлях проходив повз автозапуск: у ролику є звук,
+   * слів немає, і студія мовчки чекає кліку по кнопці, про яку власник
+   * не знає. Саме так це й виглядало: «скинув доріжку — а далі нічого».
+   *
+   * Тому умова переїхала з ДІЇ на СТАН: є доріжка, є сценарій, слів
+   * немає, нічого не крутиться → вирівнюємо. Один раз на доріжку:
+   * помилку не крутимо по колу, для повтору є кнопка «Таймкоди».
+   */
+  const autoAlignedFor = useRef<string | null>(null);
+  useEffect(() => {
+    const path = post?.audio?.path;
+    if (!post || !path) return;
+    // Слова вже є — нічого не треба; запам'ятовуємо, щоб не смикнути
+    // вирівнювання, якщо їх колись почистять руками.
+    if (post.words.length > 0) {
+      autoAlignedFor.current = path;
+      return;
+    }
+    if (!post.script.trim()) return;
+    if (align?.state === 'running' || render?.state === 'running') return;
+    if (autoAlignedFor.current === path) return;
+    autoAlignedFor.current = path;
+    void startAlign(path);
+  }, [post, align?.state, render?.state, startAlign]);
 
   // Заливка mp3 просто тут: раніше кнопка кидала у файловий воркспейс,
   // звідки треба було повертатись назад — три кроки замість одного.
@@ -2317,7 +2345,14 @@ export function PostWorkspace({
   const planned = scenes.filter((s) => s.plan != null).length;
   // Без useMemo навмисно: цей рядок стоїть ПІСЛЯ умовного return вище,
   // і хук тут ламав би правило хуків. Дванадцять id — не та ціна.
-  const findings = checkPost(post, cardSteps, (motions ?? []).map((m) => m.id));
+  // Реєстр набору віддаємо перевірці: без нього вона не відрізнить
+  // «стікер без file, але він є в наборі» від вигаданого id.
+  const findings = checkPost(
+    post,
+    cardSteps,
+    (motions ?? []).map((m) => m.id),
+    registry.map((r) => r.id),
+  );
 
 
 
